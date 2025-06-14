@@ -275,6 +275,7 @@ async def analyze_paper(
             action_items=["Review the detailed evidence in the downloaded report."],
             flags=[],
             report_path=report_url,
+            download_url=report_url,
         )
     except HTTPException:
         raise

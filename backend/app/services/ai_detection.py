@@ -107,6 +107,7 @@ def heuristic_ai_score(text: str) -> float:
 # --- Trained model tier -------------------------------------------------------
 
 _model = None
+_model_is_pipeline: bool = False
 _model_path: Optional[str] = None  # registered at boot; loaded lazily on first call
 _model_loaded_attempted: bool = False
 _model_meta = {
@@ -166,12 +167,20 @@ def _load_on_demand() -> None:
             }
             return True
     if path.exists():
-        global _model
+        global _model, _model_is_pipeline
         try:
             import joblib
 
             _model = joblib.load(path)
-            _model_meta["version"] = "logreg-v1"
+            # The shipped LR artifact is a scikit-learn Pipeline (TF-IDF + LR) that
+            # takes raw text directly; older raw-coefficient checkpoints took the
+            # 7-dim stylometric vector instead. Handle both.
+            if hasattr(_model, "transform") and hasattr(_model, "predict_proba"):
+                _model_is_pipeline = True
+                _model_meta["version"] = "logreg-pipeline"
+            else:
+                _model_is_pipeline = False
+                _model_meta["version"] = "logreg-v1"
             _model_meta["metrics"] = {
                 "f1": meta.get("lr_f1"),
                 "validation": "5-fold cross-validation (balanced)",
@@ -188,8 +197,11 @@ def trained_ai_score(text: str) -> Optional[float]:
     if _model is None:
         return None
     try:
-        features = np.array([_extract_features(text)])
-        prob = float(_model.predict_proba(features)[0][1])
+        if _model_is_pipeline:
+            prob = float(_model.predict_proba([text])[0][1])
+        else:
+            features = np.array([_extract_features(text)])
+            prob = float(_model.predict_proba(features)[0][1])
         return max(0.0, min(1.0, prob))
     except Exception as exc:  # pragma: no cover
         logger.error("Trained model inference failed: %s", exc)
