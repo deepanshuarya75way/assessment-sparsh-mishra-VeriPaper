@@ -12,6 +12,7 @@ import logging
 import math
 import re
 from dataclasses import dataclass
+from pathlib import Path as _Path
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -216,21 +217,50 @@ def trained_ai_score(text: str) -> Optional[float]:
 _transformer = None
 
 
+def _onnx_session(model_path: str) -> "Optional[InferenceSession]":
+    """Load the quantized ONNX graph if present and memory-safe."""
+    import onnxruntime as ort
+
+    onnx_path = _Path(model_path) / "model_quantized.onnx"
+    if not onnx_path.exists() or onnx_path.stat().st_size < 1_000_000:
+        return None
+    providers = ["CPUExecutionProvider"]
+    sess_options = ort.SessionOptions()
+    sess_options.intra_op_num_threads = 1
+    return ort.InferenceSession(str(onnx_path), sess_options, providers=providers)
+
+
 def load_transformer_detector(model_name_or_path: Optional[str] = None) -> bool:
-    """Lazily load a fine-tuned transformer detector from the local path or HF Hub."""
+    """Lazily load a fine-tuned transformer detector from the local path or HF Hub.
+
+    On memory-constrained hosts (e.g. Render's 512 MB free tier) the quantized
+    ONNX graph is preferred: it scores identically to the PyTorch checkpoint but
+    runs at a fraction of the resident memory because it skips torch and uses an
+    int8 dynamic-quantized runtime. The full PyTorch weights are the fallback.
+    """
     global _transformer
     if model_name_or_path is None:
         return False
     try:
-        from transformers import AutoModelForSequenceClassification, AutoTokenizer
-        import torch
+        from transformers import AutoTokenizer
 
         tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+        label_index = _resolve_label_map(model_name_or_path)
+
+        onnx = _onnx_session(model_name_or_path)
+        if onnx is not None:
+            _transformer = (tokenizer, onnx, None, label_index)
+            _model_meta["version"] = f"transformer-onnx:{model_name_or_path}"
+            return True
+
+        from transformers import AutoModelForSequenceClassification
+        import torch
+
         model = AutoModelForSequenceClassification.from_pretrained(model_name_or_path)
         model.eval()
         # Label ordering: default config label2id {ai:0, human:1} (see
         # ai_detector_transformer_metrics.json label_1 note)
-        _transformer = (tokenizer, model, torch, _resolve_label_map(model_name_or_path))
+        _transformer = (tokenizer, model, torch, label_index)
         _model_meta["version"] = f"transformer:{model_name_or_path}"
         return True
     except Exception as exc:  # pragma: no cover
@@ -238,13 +268,30 @@ def load_transformer_detector(model_name_or_path: Optional[str] = None) -> bool:
         return False
 
 
-def _weights_valid(tf_path: "Path") -> bool:
-    """True when the transformer weights file is present and substantial."""
-    weights = tf_path / "model.safetensors"
-    return weights.exists() and weights.stat().st_size > 1_000_000
+def _softmax(x, axis: int = -1):
+    """Numerically stable softmax over a numpy array."""
+    import numpy as np
+
+    x = np.asarray(x, dtype=np.float64)
+    x = x - x.max(axis=axis, keepdims=True)
+    e = np.exp(x)
+    return e / e.sum(axis=axis, keepdims=True)
 
 
-def _maybe_restore_weights(tf_path: "Path") -> None:
+def _weights_valid(tf_path: _Path) -> bool:
+    """True when the transformer weights file is present and substantial.
+
+    Accepts either the full PyTorch checkpoint (model.safetensors) or the
+    quantized ONNX graph (model_quantized.onnx), whichever is available.
+    """
+    for name in ("model.safetensors", "model_quantized.onnx"):
+        weights = tf_path / name
+        if weights.exists() and weights.stat().st_size > 1_000_000:
+            return True
+    return False
+
+
+def _maybe_restore_weights(tf_path: _Path) -> None:
     """Try to restore missing transformer weights from the pinned release.
 
     The restore needs significant free memory, so it is only attempted when
@@ -261,7 +308,6 @@ def _maybe_restore_weights(tf_path: "Path") -> None:
 def _resolve_label_map(model_path: str) -> int:
     """Return the class index that corresponds to AI text."""
     import json
-    from pathlib import Path as _Path
 
     path = _Path(model_path)
     cfg = path / "config.json"
@@ -274,12 +320,31 @@ def _resolve_label_map(model_path: str) -> int:
 
 
 def transformer_ai_score(text: str) -> Optional[float]:
-    """Run the transformer detector (0-1), or None if unavailable."""
+    """Run the transformer detector (0-1), or None if unavailable.
+
+    Uses the quantized ONNX runtime when it was loaded; otherwise runs the
+    standard PyTorch path.
+    """
     _load_on_demand()
     if _transformer is None:
         return None
     try:
         tokenizer, model, torch, ai_class = _transformer
+        if torch is None:
+            # ONNX path: raw int64 arrays, softmax done in float32
+            import numpy as np
+
+            encoded = tokenizer(
+                text, return_tensors="np", truncation=True, max_length=256, padding=True
+            )
+            inputs = {
+                "input_ids": encoded["input_ids"].astype(np.int64),
+                "attention_mask": encoded["attention_mask"].astype(np.int64),
+            }
+            logits = model.run(None, inputs)[0]
+            probs = _softmax(np.asarray(logits), axis=-1)
+            prob = float(probs[0][ai_class])
+            return max(0.0, min(1.0, prob))
         inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=256, padding=True)
         with torch.no_grad():
             logits = model(**inputs).logits
