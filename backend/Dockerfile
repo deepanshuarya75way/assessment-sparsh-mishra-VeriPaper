@@ -28,8 +28,18 @@ COPY backend/requirements.txt pyproject.toml ./
 RUN python -m pip install --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r requirements.txt
 
-# Pre-baked model artifacts (transformer detector + LR fallback)
+# Pre-baked model artifacts (transformer detector + LR fallback).
+# The transformer weights are tracked via git LFS, and Render's clone step does
+# not always run the LFS smudge filter, which leaves LFS pointer text on disk.
+# The real weights are therefore downloaded from the pinned GitHub release to
+# guarantee the image always contains the full 267 MB safetensors file.
 COPY backend/models/ models/
+RUN for f in $(find models -type f); do head -c 20 "$f" 2>/dev/null | grep -q 'version https://git-lfs' && echo "INFO: $f is an LFS pointer, replacing from release"; done \
+ && curl -fsSL -o /tmp/ai_detector_transformer.tar.gz \
+      https://github.com/SparshM8/VeriPaper/releases/download/models-v1/ai_detector_transformer.tar.gz \
+ && tar xzf /tmp/ai_detector_transformer.tar.gz -C models/ \
+ && rm -f /tmp/ai_detector_transformer.tar.gz \
+ && ls -la models/ai_detector_transformer/model.safetensors
 
 # Corpus data (arXiv abstracts used by the similarity search)
 COPY backend/data/ data/
