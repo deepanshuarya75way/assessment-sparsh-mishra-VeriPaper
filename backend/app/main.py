@@ -64,7 +64,7 @@ async def lifespan(_: FastAPI):
 
 _TRANSFORMER_RELEASE_URL = (
     "https://github.com/SparshM8/VeriPaper/releases/download"
-    "/models-v1/ai_detector_transformer.tar.gz"
+    "/models-onnx-v1/ai_detector_transformer_onnx.tar.gz"
 )
 
 
@@ -128,9 +128,12 @@ def _ensure_transformer_weights(at_boot: bool = False) -> None:
     analysis request, when the watchdog is less aggressive.
     """
     model_dir = settings.TRANSFORMER_MODEL_DIR
-    weights = model_dir / "model.safetensors"
-    if weights.exists() and weights.stat().st_size > 1_000_000:
-        return
+    # Accept either the full PyTorch checkpoint or the quantized ONNX graph
+    # as valid transformer weights (the ONNX graph is the preferred runtime).
+    for name in ("model.safetensors", "model_quantized.onnx"):
+        weights = model_dir / name
+        if weights.exists() and weights.stat().st_size > 1_000_000:
+            return
     if not model_dir.exists():
         try:
             model_dir.mkdir(parents=True, exist_ok=True)
@@ -146,7 +149,10 @@ def _ensure_transformer_weights(at_boot: bool = False) -> None:
     logger.warning("Transformer weights missing or invalid; downloading from GitHub release...")
     try:
         _restore_transformer_weights_from_release()
-        if weights.exists() and weights.stat().st_size > 1_000_000:
+        onnx = model_dir / "model_quantized.onnx"
+        if onnx.exists() and onnx.stat().st_size > 1_000_000:
+            logger.info(f"Transformer weights restored at {onnx} ({onnx.stat().st_size/1e6:.0f} MB)")
+        elif weights.exists() and weights.stat().st_size > 1_000_000:
             logger.info(f"Transformer weights restored at {weights} ({weights.stat().st_size/1e6:.0f} MB)")
         else:
             logger.error("Downloaded archive did not contain valid transformer weights")
