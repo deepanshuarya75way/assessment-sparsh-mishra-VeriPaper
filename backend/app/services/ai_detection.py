@@ -241,16 +241,27 @@ def load_transformer_detector(model_name_or_path: Optional[str] = None) -> bool:
     global _transformer
     if model_name_or_path is None:
         return False
+    # Per-stage logging: the failure point is otherwise invisible on the
+    # memory-constrained free tier where a crash wipes the process state.
+    onnx_path = _Path(model_name_or_path) / "model_quantized.onnx"
+    logger.info(
+        "Loading transformer detector from %s (onnx present=%s, size=%.0f MB)",
+        model_name_or_path,
+        onnx_path.exists(),
+        (onnx_path.stat().st_size / 1e6) if onnx_path.exists() else 0,
+    )
     try:
         from transformers import AutoTokenizer
 
         tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
         label_index = _resolve_label_map(model_name_or_path)
+        logger.info("Transformer tokenizer loaded; label_index=%s", label_index)
 
         onnx = _onnx_session(model_name_or_path)
         if onnx is not None:
             _transformer = (tokenizer, onnx, None, label_index)
             _model_meta["version"] = f"transformer-onnx:{model_name_or_path}"
+            logger.info("Transformer detector loaded via quantized ONNX runtime")
             return True
 
         from transformers import AutoModelForSequenceClassification
@@ -262,6 +273,7 @@ def load_transformer_detector(model_name_or_path: Optional[str] = None) -> bool:
         # ai_detector_transformer_metrics.json label_1 note)
         _transformer = (tokenizer, model, torch, label_index)
         _model_meta["version"] = f"transformer:{model_name_or_path}"
+        logger.info("Transformer detector loaded via PyTorch (full weights)")
         return True
     except Exception as exc:  # pragma: no cover
         logger.error("Transformer detector load failed: %s", exc)
