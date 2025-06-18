@@ -16,6 +16,9 @@ class Settings:
     ROOT_DIR = Path(__file__).resolve().parents[2]
     REPORTS_DIR = Path(os.getenv("REPORTS_DIR", str(ROOT_DIR / "reports"))).resolve()
     MODEL_PATH = Path(os.getenv("AI_MODEL_PATH", str(ROOT_DIR / "models" / "ai_detector.joblib"))).resolve()
+    TRANSFORMER_MODEL_DIR = Path(
+        os.getenv("TRANSFORMER_MODEL_DIR", str(ROOT_DIR / "models" / "ai_detector_transformer"))
+    ).resolve()
 
     MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "15"))
     ALLOWED_FILE_EXTENSIONS = {".txt", ".pdf", ".docx"}

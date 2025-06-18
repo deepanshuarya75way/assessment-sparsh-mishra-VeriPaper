@@ -31,6 +31,11 @@ async def lifespan(_: FastAPI):
         logger.error(f"❌ Database initialization failed: {e}")
         # Don't crash the app - allow degraded mode
 
+    # The transformer weights may be an unresolved git-LFS pointer in the image
+    # (Render's clone step does not always smudge LFS files). Restore them from
+    # the pinned GitHub release at startup when that happens.
+    _ensure_transformer_weights()
+
     # Load analysis engines (failures keep the app running in degraded mode)
     from .services import ai_detection
     from .services import plagiarism as plagiarism_svc
@@ -53,6 +58,58 @@ async def lifespan(_: FastAPI):
         logger.info("✅ Database connections closed")
     except Exception as e:
         logger.error(f"⚠️ Error closing database: {e}")
+
+
+_TRANSFORMER_RELEASE_URL = (
+    "https://github.com/SparshM8/VeriPaper/releases/download"
+    "/models-v1/ai_detector_transformer.tar.gz"
+)
+
+
+def _ensure_transformer_weights() -> None:
+    """Download the transformer weights at runtime if the image copy is missing
+    or is an unresolved git-LFS pointer (~100 bytes of text)."""
+    model_dir = settings.TRANSFORMER_MODEL_DIR
+    weights = model_dir / "model.safetensors"
+    if weights.exists() and weights.stat().st_size > 1_000_000:
+        return
+    if not model_dir.exists():
+        try:
+            model_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            logger.error(f"Cannot create transformer model dir {model_dir}: {e}")
+            return
+    logger.warning("Transformer weights missing or invalid; downloading from GitHub release...")
+    try:
+        import io
+        import tarfile
+
+        import requests
+
+        resp = requests.get(_TRANSFORMER_RELEASE_URL, timeout=600, stream=True)
+        resp.raise_for_status()
+        with tarfile.open(fileobj=io.BytesIO(resp.content)) as tar:
+            # The archive wraps files under `ai_detector_transformer/`; extract
+            # its members directly into the model directory (strip the prefix).
+            members = []
+            for member in tar.getmembers():
+                name = member.name.split("/", 1)[-1] if "/" in member.name else member.name
+                if not name:
+                    continue
+                member_copy = tarfile.TarInfo(name=name)
+                member_copy.size = member.size
+                member_copy.mtime = member.mtime
+                member_copy.mode = member.mode
+                member_copy.type = member.type
+                member_copy.linkname = member.linkname
+                members.append(member_copy)
+            tar.extractall(path=model_dir, members=members)
+        if weights.exists() and weights.stat().st_size > 1_000_000:
+            logger.info(f"Transformer weights restored at {weights} ({weights.stat().st_size/1e6:.0f} MB)")
+        else:
+            logger.error("Downloaded archive did not contain valid transformer weights")
+    except Exception as e:
+        logger.error(f"Failed to download transformer weights at runtime: {e}")
 
 
 app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION, lifespan=lifespan)
