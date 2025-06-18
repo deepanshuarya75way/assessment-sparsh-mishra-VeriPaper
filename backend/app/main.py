@@ -152,10 +152,17 @@ def _ensure_transformer_weights(at_boot: bool = False) -> None:
         onnx = model_dir / "model_quantized.onnx"
         if onnx.exists() and onnx.stat().st_size > 1_000_000:
             logger.info(f"Transformer weights restored at {onnx} ({onnx.stat().st_size/1e6:.0f} MB)")
-        elif weights.exists() and weights.stat().st_size > 1_000_000:
-            logger.info(f"Transformer weights restored at {weights} ({weights.stat().st_size/1e6:.0f} MB)")
         else:
-            logger.error("Downloaded archive did not contain valid transformer weights")
+            valid = None
+            for name in ("model.safetensors", "model_quantized.onnx"):
+                cand = model_dir / name
+                if cand.exists() and cand.stat().st_size > 1_000_000:
+                    valid = cand
+                    break
+            if valid is not None:
+                logger.info(f"Transformer weights restored at {valid} ({valid.stat().st_size/1e6:.0f} MB)")
+            else:
+                logger.error("Downloaded archive did not contain valid transformer weights")
     except Exception as e:
         logger.error(f"Failed to download transformer weights at runtime: {e}")
 
