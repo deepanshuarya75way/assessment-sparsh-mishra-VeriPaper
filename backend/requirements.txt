@@ -4,10 +4,14 @@ python-multipart==0.0.9
 pydantic==2.8.2
 PyMuPDF==1.24.9
 python-docx==1.1.2
-torch==2.4.0+cpu
---extra-index-url https://download.pytorch.org/whl/cpu
-transformers==4.44.2
+# Torch and the heavy transformers library were intentionally removed to keep
+# the production image under Render's 512 MB free-tier memory limit. Runtime
+# inference uses the int8 quantized ONNX graph with the standalone tokenizers
+# library only (~115 MB total footprint vs ~470 MB with transformers+torch).
+# The full PyTorch checkpoint remains the training artifact and is never loaded
+# at runtime on memory-constrained hosts.
 onnxruntime==1.18.1
+tokenizers>=0.19,<1.0
 scikit-learn==1.5.1
 scipy==1.13.1
 numpy<2

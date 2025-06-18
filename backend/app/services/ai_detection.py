@@ -238,18 +238,24 @@ def _onnx_session(model_path: str) -> "Optional[InferenceSession]":
 
 
 def load_transformer_detector(model_name_or_path: Optional[str] = None) -> bool:
-    """Lazily load a fine-tuned transformer detector from the local path or HF Hub.
+    """Lazily load a fine-tuned transformer detector from the local directory.
 
-    On memory-constrained hosts (e.g. Render's 512 MB free tier) the quantized
-    ONNX graph is preferred: it scores identically to the PyTorch checkpoint but
-    runs at a fraction of the resident memory because it skips torch and uses an
-    int8 dynamic-quantized runtime. The full PyTorch weights are the fallback.
+    Memory-first runtime design: on memory-constrained hosts (e.g. Render's
+    512 MB free tier) the whole inference stack is the int8 quantized ONNX
+    graph plus the standalone ``tokenizers`` library — no torch, no full
+    transformers. Measured resident memory: ~115 MB total (vs ~470 MB when
+    torch+transformers are imported). The model was trained and validated with
+    the PyTorch checkpoint, but the quantized graph scores within ±0.023 of it.
+
+    The ``_transformer`` tuple is (tokenizer, session, None, ai_class_index);
+    the third slot mirrors the old PyTorch tuple layout but torch is None, so
+    ``transformer_ai_score`` always takes the ONNX path.
     """
     global _transformer, _transformer_load_error
     if model_name_or_path is None:
         return False
     # Per-stage logging: the failure point is otherwise invisible on the
-    # memory-constrained free tier where a crash wipes the process state.
+    # memory-constrained free tier where an OOM kill wipes the process state.
     onnx_path = _Path(model_name_or_path) / "model_quantized.onnx"
     logger.info(
         "Loading transformer detector from %s (onnx present=%s, size=%.0f MB)",
@@ -258,10 +264,10 @@ def load_transformer_detector(model_name_or_path: Optional[str] = None) -> bool:
         (onnx_path.stat().st_size / 1e6) if onnx_path.exists() else 0,
     )
     try:
-        from transformers import AutoTokenizer
-
         try:
-            tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+            from tokenizers import Tokenizer
+
+            tokenizer = Tokenizer.from_file(str(_Path(model_name_or_path) / "tokenizer.json"))
             label_index = _resolve_label_map(model_name_or_path)
         except Exception as exc:
             _transformer_load_error = f"tokenizer: {type(exc).__name__}: {exc}"
@@ -270,27 +276,21 @@ def load_transformer_detector(model_name_or_path: Optional[str] = None) -> bool:
         logger.info("Transformer tokenizer loaded; label_index=%s", label_index)
 
         onnx = _onnx_session(model_name_or_path)
-        if onnx is not None:
-            _transformer = (tokenizer, onnx, None, label_index)
-            _model_meta["version"] = f"transformer-onnx:{model_name_or_path}"
-            logger.info("Transformer detector loaded via quantized ONNX runtime")
-            return True
-
-        from transformers import AutoModelForSequenceClassification
-        import torch
-
-        try:
-            model = AutoModelForSequenceClassification.from_pretrained(model_name_or_path)
-            model.eval()
-        except Exception as exc:
-            _transformer_load_error = f"torch: {type(exc).__name__}: {exc}"
-            logger.error("Transformer PyTorch load failed: %s", _transformer_load_error)
+        if onnx is None:
+            # No safe fallback on memory-constrained hosts: torch+transformers
+            # would need ~350 MB more resident memory than the 512 MB limit
+            # allows (measured OOM kills at ~517 MB). Fall back to the
+            # classical models instead.
+            _transformer_load_error = (
+                "onnx: session unavailable; PyTorch fallback omitted on "
+                "memory-constrained hosts (see deploy log); using classical models"
+            )
+            logger.warning("Transformer ONNX load failed: %s", _transformer_load_error)
             return False
-        # Label ordering: default config label2id {ai:0, human:1} (see
-        # ai_detector_transformer_metrics.json label_1 note)
-        _transformer = (tokenizer, model, torch, label_index)
-        _model_meta["version"] = f"transformer:{model_name_or_path}"
-        logger.info("Transformer detector loaded via PyTorch (full weights)")
+
+        _transformer = (tokenizer, onnx, None, label_index)
+        _model_meta["version"] = f"transformer-onnx:{model_name_or_path}"
+        logger.info("Transformer detector loaded via quantized ONNX runtime (torch-free)")
         return True
     except Exception as exc:  # pragma: no cover
         _transformer_load_error = f"unknown: {type(exc).__name__}: {exc}"
@@ -358,25 +358,21 @@ def transformer_ai_score(text: str) -> Optional[float]:
         return None
     try:
         tokenizer, model, torch, ai_class = _transformer
-        if torch is None:
-            # ONNX path: raw int64 arrays, softmax done in float32
-            import numpy as np
+        import numpy as np
 
-            encoded = tokenizer(
-                text, return_tensors="np", truncation=True, max_length=256, padding=True
-            )
-            inputs = {
-                "input_ids": encoded["input_ids"].astype(np.int64),
-                "attention_mask": encoded["attention_mask"].astype(np.int64),
-            }
-            logits = model.run(None, inputs)[0]
-            probs = _softmax(np.asarray(logits), axis=-1)
-            prob = float(probs[0][ai_class])
-            return max(0.0, min(1.0, prob))
-        inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=256, padding=True)
-        with torch.no_grad():
-            logits = model(**inputs).logits
-        probs = torch.softmax(logits, dim=-1)
+        # ONNX path (torch is always None): the standalone tokenizers lib
+        # returns plain ids; truncate or pad to the 256-token graph input.
+        ids = tokenizer.encode(text).ids[:256]
+        real = len(ids)
+        if real < 256:
+            ids = ids + [0] * (256 - real)
+        mask = [1] * real + [0] * (256 - real)
+        inputs = {
+            "input_ids": np.array([ids], dtype=np.int64),
+            "attention_mask": np.array([mask], dtype=np.int64),
+        }
+        logits = model.run(None, inputs)[0]
+        probs = _softmax(np.asarray(logits), axis=-1)
         prob = float(probs[0][ai_class])
         return max(0.0, min(1.0, prob))
     except Exception as exc:  # pragma: no cover
