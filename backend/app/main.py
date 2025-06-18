@@ -81,29 +81,37 @@ def _ensure_transformer_weights() -> None:
             return
     logger.warning("Transformer weights missing or invalid; downloading from GitHub release...")
     try:
-        import io
         import tarfile
+        import tempfile
 
         import requests
 
-        resp = requests.get(_TRANSFORMER_RELEASE_URL, timeout=600, stream=True)
-        resp.raise_for_status()
-        with tarfile.open(fileobj=io.BytesIO(resp.content)) as tar:
-            # The archive wraps files under `ai_detector_transformer/`; extract
-            # its members directly into the model directory (strip the prefix).
-            members = []
-            for member in tar.getmembers():
-                name = member.name.split("/", 1)[-1] if "/" in member.name else member.name
-                if not name:
-                    continue
-                member_copy = tarfile.TarInfo(name=name)
-                member_copy.size = member.size
-                member_copy.mtime = member.mtime
-                member_copy.mode = member.mode
-                member_copy.type = member.type
-                member_copy.linkname = member.linkname
-                members.append(member_copy)
-            tar.extractall(path=model_dir, members=members)
+        tmp_path = str(model_dir / "._weights_tmp.tar.gz")
+        try:
+            with open(tmp_path, "wb") as tmp:
+                with requests.get(_TRANSFORMER_RELEASE_URL, timeout=600, stream=True) as resp:
+                    resp.raise_for_status()
+                    for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                        tmp.write(chunk)
+            # Stream-extract the tarball directly from disk (no in-memory buffer)
+            with tarfile.open(tmp_path, mode="r|gz") as tar:
+                for member in tar:
+                    # The archive wraps files under `ai_detector_transformer/`;
+                    # extract each member directly into the model directory.
+                    name = member.name.split("/", 1)[-1] if "/" in member.name else member.name
+                    if not name:
+                        continue
+                    safe_target = (model_dir / name).resolve()
+                    if not str(safe_target).startswith(str(model_dir.resolve())):
+                        continue  # skip path-traversal attempts
+                    if member.isfile():
+                        with tar.extractfile(member) as src, open(safe_target, "wb") as dst:
+                            dst.write(src.read())
+        finally:
+            try:
+                Path(tmp_path).unlink()
+            except OSError:
+                pass
         if weights.exists() and weights.stat().st_size > 1_000_000:
             logger.info(f"Transformer weights restored at {weights} ({weights.stat().st_size/1e6:.0f} MB)")
         else:
