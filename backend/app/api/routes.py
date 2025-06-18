@@ -319,6 +319,41 @@ def detector_config():
     }
 
 
+@router.get("/detector/status")
+def detector_status():
+    """Live diagnostic of the transformer detector state (files + real test inference).
+
+    This exists so the exact failure point is visible without dashboard access.
+    """
+    out = {
+        "model_root": str(settings.MODEL_PATH),
+        "transformer_dir": str(settings.TRANSFORMER_MODEL_DIR),
+        "files": {},
+        "diagnosis": "",
+    }
+    tf_dir = settings.TRANSFORMER_MODEL_DIR
+    if tf_dir.exists():
+        for entry in sorted(tf_dir.iterdir()):
+            out["files"][entry.name] = entry.stat().st_size
+    else:
+        out["diagnosis"] = "transformer directory missing"
+        return out
+
+    try:
+        score = ai_detection.transformer_ai_score("This is a short diagnostic sentence.")
+        if score is not None:
+            out["diagnosis"] = f"transformer inference OK (test score={score:.4f})"
+        else:
+            out["diagnosis"] = (
+                "transformer load failed silently; see deploy logs for the exact "
+                "'Transformer detector load failed' traceback"
+            )
+        out["test_inference_score"] = round(score, 4) if score is not None else None
+    except Exception as exc:  # pragma: no cover
+        out["diagnosis"] = f"test inference crashed: {exc}"
+    return out
+
+
 @router.get("/methodology")
 def methodology():
     """Explain how each module works."""
