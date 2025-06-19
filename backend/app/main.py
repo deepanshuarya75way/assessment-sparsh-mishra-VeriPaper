@@ -33,8 +33,10 @@ async def lifespan(_: FastAPI):
 
     # The transformer weights may be an unresolved git-LFS pointer in the image
     # (Render's clone step does not always smudge LFS files). Restore them from
-    # the pinned GitHub release at startup when that happens.
-    _ensure_transformer_weights()
+    # the pinned GitHub release when memory headroom allows; on the 512 MB free
+    # tier a cold-start download plus uvicorn startup can exceed the limit, so
+    # the fetch is deferred to the first analysis request in that case.
+    _ensure_transformer_weights(at_boot=True)
 
     # Load analysis engines (failures keep the app running in degraded mode)
     from .services import ai_detection
@@ -66,9 +68,65 @@ _TRANSFORMER_RELEASE_URL = (
 )
 
 
-def _ensure_transformer_weights() -> None:
+def _memory_free_bytes() -> int:
+    """Read the host's free memory from /proc/meminfo (Linux only)."""
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) * 1024
+    except Exception:
+        pass
+    return 0
+
+
+def _has_memory_headroom(needed_mb: float = 350.0) -> bool:
+    """Allow the heavy download only when free memory comfortably exceeds the
+    amount the extraction and model load will consume."""
+    free = _memory_free_bytes()
+    return free == 0 or free > needed_mb * 1024 * 1024
+
+
+def _restore_transformer_weights_from_release() -> None:
+    """Stream the weights tarball to disk and extract it with minimal memory."""
+    import tarfile
+
+    import requests
+
+    model_dir = settings.TRANSFORMER_MODEL_DIR
+    tmp_path = str(model_dir / "._weights_tmp.tar.gz")
+    try:
+        with open(tmp_path, "wb") as tmp:
+            with requests.get(_TRANSFORMER_RELEASE_URL, timeout=600, stream=True) as resp:
+                resp.raise_for_status()
+                for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                    tmp.write(chunk)
+        with tarfile.open(tmp_path, mode="r|gz") as tar:
+            for member in tar:
+                name = member.name.split("/", 1)[-1] if "/" in member.name else member.name
+                if not name:
+                    continue
+                safe_target = (model_dir / name).resolve()
+                if not str(safe_target).startswith(str(model_dir.resolve())):
+                    continue  # skip path-traversal attempts
+                if member.isfile():
+                    with tar.extractfile(member) as src, open(safe_target, "wb") as dst:
+                        dst.write(src.read())
+    finally:
+        try:
+            Path(tmp_path).unlink()
+        except OSError:
+            pass
+
+
+def _ensure_transformer_weights(at_boot: bool = False) -> None:
     """Download the transformer weights at runtime if the image copy is missing
-    or is an unresolved git-LFS pointer (~100 bytes of text)."""
+    or is an unresolved git-LFS pointer (~100 bytes of text).
+
+    At boot (during the strict cold-start memory window on Render's free tier)
+    the download is only attempted when free memory headroom exists; otherwise
+    it is deferred so the service stays up and the fetch is retried by the first
+    analysis request, when the watchdog is less aggressive.
+    """
     model_dir = settings.TRANSFORMER_MODEL_DIR
     weights = model_dir / "model.safetensors"
     if weights.exists() and weights.stat().st_size > 1_000_000:
@@ -79,39 +137,15 @@ def _ensure_transformer_weights() -> None:
         except Exception as e:
             logger.error(f"Cannot create transformer model dir {model_dir}: {e}")
             return
+    if at_boot and not _has_memory_headroom():
+        logger.warning(
+            "Transformer weights missing and memory headroom insufficient at boot; "
+            "deferring download until the first analysis request."
+        )
+        return
     logger.warning("Transformer weights missing or invalid; downloading from GitHub release...")
     try:
-        import tarfile
-        import tempfile
-
-        import requests
-
-        tmp_path = str(model_dir / "._weights_tmp.tar.gz")
-        try:
-            with open(tmp_path, "wb") as tmp:
-                with requests.get(_TRANSFORMER_RELEASE_URL, timeout=600, stream=True) as resp:
-                    resp.raise_for_status()
-                    for chunk in resp.iter_content(chunk_size=1024 * 1024):
-                        tmp.write(chunk)
-            # Stream-extract the tarball directly from disk (no in-memory buffer)
-            with tarfile.open(tmp_path, mode="r|gz") as tar:
-                for member in tar:
-                    # The archive wraps files under `ai_detector_transformer/`;
-                    # extract each member directly into the model directory.
-                    name = member.name.split("/", 1)[-1] if "/" in member.name else member.name
-                    if not name:
-                        continue
-                    safe_target = (model_dir / name).resolve()
-                    if not str(safe_target).startswith(str(model_dir.resolve())):
-                        continue  # skip path-traversal attempts
-                    if member.isfile():
-                        with tar.extractfile(member) as src, open(safe_target, "wb") as dst:
-                            dst.write(src.read())
-        finally:
-            try:
-                Path(tmp_path).unlink()
-            except OSError:
-                pass
+        _restore_transformer_weights_from_release()
         if weights.exists() and weights.stat().st_size > 1_000_000:
             logger.info(f"Transformer weights restored at {weights} ({weights.stat().st_size/1e6:.0f} MB)")
         else:

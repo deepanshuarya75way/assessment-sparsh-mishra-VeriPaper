@@ -157,9 +157,12 @@ def _load_on_demand() -> None:
     _model_loaded_attempted = True
     from pathlib import Path
     path = Path(_model_path)
-    engine, meta = _pick_engine(path)
     tf_path = path.parent / "ai_detector_transformer"
-    if engine == "transformer" and tf_path.exists():
+    # If the transformer weights are missing (e.g. an LFS pointer in the image),
+    # attempt a memory-safe restore now that we are past the strict boot window.
+    _maybe_restore_weights(tf_path)
+    engine, meta = _pick_engine(path)
+    if engine == "transformer" and tf_path.exists() and _weights_valid(tf_path):
         if load_transformer_detector(str(tf_path)):
             _model_meta["metrics"] = {
                 "f1": meta.get("transformer_f1"),
@@ -233,6 +236,26 @@ def load_transformer_detector(model_name_or_path: Optional[str] = None) -> bool:
     except Exception as exc:  # pragma: no cover
         logger.error("Transformer detector load failed: %s", exc)
         return False
+
+
+def _weights_valid(tf_path: "Path") -> bool:
+    """True when the transformer weights file is present and substantial."""
+    weights = tf_path / "model.safetensors"
+    return weights.exists() and weights.stat().st_size > 1_000_000
+
+
+def _maybe_restore_weights(tf_path: "Path") -> None:
+    """Try to restore missing transformer weights from the pinned release.
+
+    The restore needs significant free memory, so it is only attempted when
+    headroom exists; otherwise the LR fallback is used and nothing crashes.
+    """
+    try:
+        from ..main import _ensure_transformer_weights
+
+        _ensure_transformer_weights(at_boot=False)
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Weights restore skipped: %s", exc)
 
 
 def _resolve_label_map(model_path: str) -> int:
