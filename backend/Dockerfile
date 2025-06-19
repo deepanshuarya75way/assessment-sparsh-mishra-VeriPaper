@@ -22,17 +22,22 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# Cache-buster: bump this value whenever the model corpus must be re-fetched.
-# Render's Docker builds reuse layer cache, and a stale cache previously skipped
-# the weights-download step below; this ENV invalidates that cache chain.
-ENV MODEL_CACHEBUST=4
+# Copy requirements under a distinct name and pin a unique build marker so that
+# the pip install layer can never be served from a stale cache entry.
+# Render's BuildKit cache previously reused a cached pip layer from April 2026
+# (full GPU torch, no onnxruntime) across later builds, breaking the AI engine;
+# both the input hash (deps-onnx.txt) and the command string (build marker)
+# are now unique per revision, and the ARG before the layer further forces a
+# cache miss whenever bumped.
+ARG PY_DEP_BUILD_MARKER=render-deps-v5-$(date +%s)
+COPY backend/requirements.txt deps-onnx.txt
+COPY pyproject.toml ./
 
-# Copy requirements and install Python dependencies
-COPY backend/requirements.txt pyproject.toml ./
-
-RUN python -m pip install --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir --force-reinstall "onnxruntime==1.18.1"
+RUN echo "DEP_BUILD_MARKER=$PY_DEP_BUILD_MARKER" && \
+    python -m pip install --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r deps-onnx.txt && \
+    pip install --no-cache-dir --force-reinstall "onnxruntime==1.18.1" && \
+    python -c "import onnxruntime; print('onnxruntime', onnxruntime.__version__)"
 
 # Pre-baked model artifacts (LR fallback only).
 # The quantized ONNX transformer graph (65 MB) is too heavy for Render's clone
