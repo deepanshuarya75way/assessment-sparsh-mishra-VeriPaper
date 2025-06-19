@@ -215,6 +215,7 @@ def trained_ai_score(text: str) -> Optional[float]:
 # --- Transformer tier (Hugging Face) ------------------------------------------
 
 _transformer = None
+_transformer_load_error: Optional[str] = None  # staged load failure detail
 
 
 def _onnx_session(model_path: str) -> "Optional[InferenceSession]":
@@ -238,7 +239,7 @@ def load_transformer_detector(model_name_or_path: Optional[str] = None) -> bool:
     runs at a fraction of the resident memory because it skips torch and uses an
     int8 dynamic-quantized runtime. The full PyTorch weights are the fallback.
     """
-    global _transformer
+    global _transformer, _transformer_load_error
     if model_name_or_path is None:
         return False
     # Per-stage logging: the failure point is otherwise invisible on the
@@ -253,8 +254,13 @@ def load_transformer_detector(model_name_or_path: Optional[str] = None) -> bool:
     try:
         from transformers import AutoTokenizer
 
-        tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
-        label_index = _resolve_label_map(model_name_or_path)
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+            label_index = _resolve_label_map(model_name_or_path)
+        except Exception as exc:
+            _transformer_load_error = f"tokenizer: {type(exc).__name__}: {exc}"
+            logger.error("Transformer tokenizer load failed: %s", _transformer_load_error)
+            return False
         logger.info("Transformer tokenizer loaded; label_index=%s", label_index)
 
         onnx = _onnx_session(model_name_or_path)
@@ -267,8 +273,13 @@ def load_transformer_detector(model_name_or_path: Optional[str] = None) -> bool:
         from transformers import AutoModelForSequenceClassification
         import torch
 
-        model = AutoModelForSequenceClassification.from_pretrained(model_name_or_path)
-        model.eval()
+        try:
+            model = AutoModelForSequenceClassification.from_pretrained(model_name_or_path)
+            model.eval()
+        except Exception as exc:
+            _transformer_load_error = f"torch: {type(exc).__name__}: {exc}"
+            logger.error("Transformer PyTorch load failed: %s", _transformer_load_error)
+            return False
         # Label ordering: default config label2id {ai:0, human:1} (see
         # ai_detector_transformer_metrics.json label_1 note)
         _transformer = (tokenizer, model, torch, label_index)
@@ -423,6 +434,7 @@ def detect_ai(text: str, use_trained: bool = True) -> AIDetectionResult:
 def get_detector_meta() -> dict:
     return {
         "model_version": _model_meta["version"],
+        "transformer_load_error": _transformer_load_error,
         "has_trained_model": _model is not None,
         "has_transformer": _transformer is not None,
         "metrics": _model_meta["metrics"],

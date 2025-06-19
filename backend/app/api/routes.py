@@ -331,6 +331,7 @@ def detector_status():
         "files": {},
         "diagnosis": "",
     }
+    out["transformer_load_error"] = ai_detection.get_detector_meta().get("transformer_load_error")
     tf_dir = settings.TRANSFORMER_MODEL_DIR
     if tf_dir.exists():
         for entry in sorted(tf_dir.iterdir()):
