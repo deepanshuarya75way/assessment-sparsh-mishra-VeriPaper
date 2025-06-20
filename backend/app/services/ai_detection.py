@@ -228,7 +228,13 @@ def _onnx_session(model_path: str) -> "Optional[InferenceSession]":
     providers = ["CPUExecutionProvider"]
     sess_options = ort.SessionOptions()
     sess_options.intra_op_num_threads = 1
-    return ort.InferenceSession(str(onnx_path), sess_options, providers=providers)
+    try:
+        return ort.InferenceSession(str(onnx_path), sess_options, providers=providers)
+    except Exception as exc:
+        global _transformer_load_error
+        _transformer_load_error = f"onnx: {type(exc).__name__}: {exc}"
+        logger.error("ONNX session creation failed: %s", _transformer_load_error)
+        return None
 
 
 def load_transformer_detector(model_name_or_path: Optional[str] = None) -> bool:
