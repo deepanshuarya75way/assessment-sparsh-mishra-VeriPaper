@@ -331,8 +331,17 @@ def detector_status():
         "files": {},
         "diagnosis": "",
     }
-    out["transformer_load_error"] = ai_detection.get_detector_meta().get("transformer_load_error")
     tf_dir = settings.TRANSFORMER_MODEL_DIR
+    # Force the transformer load directly (bypasses the once-per-process guard)
+    # so the exact failure reason and memory footprint are always visible.
+    before_kb = _rss_kb()
+    load_ok = ai_detection.load_transformer_detector(str(tf_dir))
+    after_kb = _rss_kb()
+    out["load_attempted"] = True
+    out["load_ok"] = load_ok
+    out["memory_before_kb"] = before_kb
+    out["memory_after_kb"] = after_kb
+    out["transformer_load_error"] = ai_detection.get_detector_meta().get("transformer_load_error")
     if tf_dir.exists():
         for entry in sorted(tf_dir.iterdir()):
             out["files"][entry.name] = entry.stat().st_size
@@ -354,6 +363,15 @@ def detector_status():
         out["diagnosis"] = f"test inference crashed: {exc}"
     return out
 
+
+def _rss_kb() -> int:
+    """Current process peak RSS in KB (Linux only)."""
+    import resource
+
+    try:
+        return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    except Exception:
+        return 0
 
 @router.get("/methodology")
 def methodology():
