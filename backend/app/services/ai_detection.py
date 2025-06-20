@@ -287,10 +287,9 @@ def load_transformer_detector(model_name_or_path: Optional[str] = None) -> bool:
         logger.info("Transformer detector loaded via PyTorch (full weights)")
         return True
     except Exception as exc:  # pragma: no cover
-        logger.error("Transformer detector load failed: %s", exc)
+        _transformer_load_error = f"unknown: {type(exc).__name__}: {exc}"
+        logger.error("Transformer detector load failed: %s", _transformer_load_error)
         return False
-
-
 def _softmax(x, axis: int = -1):
     """Numerically stable softmax over a numpy array."""
     import numpy as np
