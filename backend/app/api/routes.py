@@ -373,6 +373,28 @@ def _rss_kb() -> int:
     except Exception:
         return 0
 
+@router.get("/detector/env")
+def detector_env():
+    """Runtime package probe: shows what pip actually installed in the container.
+
+    Used to diagnose missing dependency installs caused by build caching.
+    """
+    import subprocess
+
+    out: dict = {}
+    for pkg in ("onnxruntime", "torch", "transformers", "fastapi", "scikit-learn"):
+        try:
+            res = subprocess.run(
+                ["pip", "show", pkg], capture_output=True, text=True, timeout=20
+            )
+            out[pkg] = (
+                res.stdout.strip().split("\n", 1)[1] if res.stdout.strip() else "NOT INSTALLED"
+            )
+        except Exception as exc:  # pragma: no cover
+            out[pkg] = f"probe error: {exc}"
+    return out
+
+
 @router.get("/methodology")
 def methodology():
     """Explain how each module works."""
