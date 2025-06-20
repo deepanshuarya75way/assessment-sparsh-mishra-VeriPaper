@@ -31,7 +31,10 @@ ENV MODEL_CACHEBUST=3
 COPY backend/requirements.txt pyproject.toml ./
 
 RUN python -m pip install --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir --force-reinstall "onnxruntime==1.18.1" && \
+    pip install --no-cache-dir --force-reinstall "torch==2.4.0+cpu" \
+        --extra-index-url https://download.pytorch.org/whl/cpu --no-deps
 
 # Pre-baked model artifacts (LR fallback only).
 # The quantized ONNX transformer graph (65 MB) is too heavy for Render's clone
