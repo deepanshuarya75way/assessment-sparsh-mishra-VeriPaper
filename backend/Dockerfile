@@ -25,7 +25,7 @@ WORKDIR /app
 # Cache-buster: bump this value whenever the model corpus must be re-fetched.
 # Render's Docker builds reuse layer cache, and a stale cache previously skipped
 # the weights-download step below; this ENV invalidates that cache chain.
-ENV MODEL_CACHEBUST=2
+ENV MODEL_CACHEBUST=3
 
 # Copy requirements and install Python dependencies
 COPY backend/requirements.txt pyproject.toml ./
