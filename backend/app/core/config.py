@@ -13,7 +13,7 @@ class Settings:
     ENVIRONMENT = os.getenv("ENVIRONMENT", "development").lower()
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
-    ROOT_DIR = Path(__file__).resolve().parents[3]
+    ROOT_DIR = Path(__file__).resolve().parents[2]
     REPORTS_DIR = Path(os.getenv("REPORTS_DIR", str(ROOT_DIR / "reports"))).resolve()
     MODEL_PATH = Path(os.getenv("AI_MODEL_PATH", str(ROOT_DIR / "models" / "ai_detector.joblib"))).resolve()
 
@@ -40,7 +40,7 @@ class Settings:
     @property
     def database_url(self) -> str:
         if self.DB_ENGINE == "sqlite":
-            db_path = os.getenv("DB_PATH", ":memory:")
+            db_path = os.getenv("DB_PATH", str(self.ROOT_DIR / "veripaper.sqlite"))
             if db_path == ":memory:":
                 return "sqlite:///:memory:"
             return f"sqlite:///{Path(db_path).resolve()}"
