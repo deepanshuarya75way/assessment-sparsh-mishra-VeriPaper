@@ -1,274 +1,360 @@
-import re
+"""Analysis API routes.
+
+POST /api/analyze            — full paper analysis (all five modules)
+GET  /api/history            — recent analysis history (from DB)
+GET  /api/history/{id}       — replay a previous analysis
+GET  /api/detector/config    — honest detector config + measured metrics
+GET  /api/methodology        — how each module works (transparency page)
+"""
+import hashlib
+import json
+import logging
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List
+from typing import Optional
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import Request
+from sqlalchemy import desc
+from sqlalchemy.orm import Session
 
 from ..core.config import settings
-from ..models.schemas import AnalysisResult, PlagiarismMatch
-import json
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
+from ..core.database import get_db
+from ..models.database import AnalysisResult as AnalysisRecord
+from ..models.schemas import (
+    AnalysisResult,
+    AIDetectionModuleResult,
+    CitationModuleResult,
+    PlagiarismMatchSchema,
+    PlagiarismModuleResult,
+    ScoreContributions,
+    SectionEvidence,
+    StatisticalModuleResult,
+    WritingCheck,
+    WritingModuleResult,
+)
+from ..services import (
+    ai_detection,
+    citations as citation_svc,
+    parsing,
+    plagiarism as plagiarism_svc,
+    scoring,
+    statistics as statistics_svc,
+    writing_quality,
+)
+from ..services.report import write_pdf_report
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["analysis"])
 
-OPTIMAL_AI_THRESHOLD = 0.45
 MAX_UPLOAD_BYTES = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
 
-
-def _validate_file(file: UploadFile, payload: bytes) -> None:
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="Missing filename")
-
-    extension = Path(file.filename).suffix.lower()
-    if extension not in settings.ALLOWED_FILE_EXTENSIONS:
-        allowed = ", ".join(sorted(settings.ALLOWED_FILE_EXTENSIONS))
-        raise HTTPException(status_code=400, detail=f"Unsupported file type. Allowed: {allowed}")
-
-    if len(payload) == 0:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty")
-
-    if len(payload) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large. Max size is {settings.MAX_UPLOAD_SIZE_MB} MB",
-        )
+# Simple in-memory rate limiting: per-IP analyze budget
+_rate_window: dict = {}
+RATE_LIMIT = int(settings.__dict__.get("RATE_LIMIT_PER_MINUTE", 20))
+RATE_WINDOW_SEC = 60
 
 
-def _extract_text(file: UploadFile, payload: bytes) -> str:
-    extension = Path(file.filename).suffix.lower()
-    if extension == ".txt":
-        return payload.decode("utf-8", errors="ignore")
-    # Production baseline fallback: safely decode bytes for non-txt while preserving API behavior.
-    return payload.decode("utf-8", errors="ignore")
+def _check_rate_limit(client_ip: str) -> None:
+    now = time.time()
+    window = _rate_window.setdefault(client_ip, {"count": 0, "reset_at": now + RATE_WINDOW_SEC})
+    if now > window["reset_at"]:
+        window["count"] = 0
+        window["reset_at"] = now + RATE_WINDOW_SEC
+    window["count"] += 1
+    if window["count"] > RATE_LIMIT:
+        raise HTTPException(status_code=429, detail="Too many analyses from this address; try again in a minute.")
 
 
-def _safe_ratio(numerator: float, denominator: float) -> float:
-    if denominator <= 0:
-        return 0.0
-    return numerator / denominator
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("X-Forwarded-For")
+    return forwarded.split(",")[0].strip() if forwarded else request.client.host if request.client else "unknown"
 
 
-def _ai_probability(text: str) -> float:
-    lowered = text.lower()
-    words = re.findall(r"\b[a-zA-Z]{2,}\b", lowered)
-    unique_words = len(set(words))
-    word_count = len(words)
-
-    repetitive_ratio = 1.0 - _safe_ratio(unique_words, max(word_count, 1))
-    sentence_count = max(1, len(re.findall(r"[.!?]", text)))
-    avg_sentence_length = _safe_ratio(word_count, sentence_count)
-    bursty_punctuation = len(re.findall(r"[;:,]", text))
-
-    keyword_score = sum(
-        lowered.count(token)
-        for token in [
-            "we propose",
-            "in this paper",
-            "state-of-the-art",
-            "novel framework",
-            "significant improvement",
-        ]
-    )
-
-    score = (
-        0.12
-        + min(0.45, repetitive_ratio * 0.7)
-        + min(0.2, _safe_ratio(keyword_score, 8))
-        + min(0.15, _safe_ratio(max(avg_sentence_length - 20, 0), 80))
-        + min(0.08, _safe_ratio(bursty_punctuation, 200))
-    )
-    return max(0.02, min(0.98, score))
-
-
-def _plagiarism_score(text: str) -> tuple[int, List[PlagiarismMatch]]:
-    paragraphs = [part.strip() for part in re.split(r"\n\s*\n", text) if part.strip()]
-    normalized = [re.sub(r"\s+", " ", p.lower()) for p in paragraphs]
-    duplicate_count = len(normalized) - len(set(normalized))
-    duplicate_ratio = _safe_ratio(duplicate_count, max(len(normalized), 1))
-
-    quote_blocks = len(re.findall(r'"[^"]{40,}"', text))
-    quote_ratio = min(1.0, _safe_ratio(quote_blocks, 8))
-
-    score = int(min(100, max(0, round((duplicate_ratio * 70 + quote_ratio * 30) * 100))))
-
-    matches: List[PlagiarismMatch] = []
-    if score > 20:
-        matches.append(
-            PlagiarismMatch(
-                title="Repeated paragraph pattern detected",
-                similarity=min(99, score),
-                source="Internal similarity heuristic",
-            )
-        )
-    return score, matches
-
-
-def _citation_validity(text: str) -> tuple[int, List[str], List[str], List[str]]:
-    dois = re.findall(r"10\.\d{4,9}/[-._;()/:A-Za-z0-9]+", text)
-    unique_dois = sorted(set(doi.rstrip(".,;") for doi in dois))
-    invalid_dois = [doi for doi in unique_dois if len(doi) < 10 or " " in doi]
-
-    reference_lines = [line for line in text.splitlines() if "doi" in line.lower() or "http" in line.lower()]
-    missing_dois = [line[:80] for line in reference_lines if "doi" not in line.lower()][:5]
-
-    year_values = [int(year) for year in re.findall(r"\b(19\d{2}|20\d{2})\b", text)]
-    current_year = datetime.now(timezone.utc).year
-    year_mismatches = [str(year) for year in year_values if year > current_year + 1 or year < 1900][:5]
-
-    if not reference_lines:
-        return 70, invalid_dois, [], year_mismatches
-
-    valid_count = max(0, len(unique_dois) - len(invalid_dois))
-    validity = int(min(100, max(0, round(_safe_ratio(valid_count, max(len(reference_lines), 1)) * 100))))
-    return validity, invalid_dois, missing_dois, year_mismatches
-
-
-def _statistical_risk(text: str) -> int:
-    p_values = [float(val) for val in re.findall(r"p\s*[<=>]\s*(0?\.\d+)", text.lower())]
-    if not p_values:
-        return 10
-
-    suspicious = sum(1 for p in p_values if p < 0 or p > 1 or (0.045 <= p <= 0.05))
-    risk = int(min(100, round(_safe_ratio(suspicious, len(p_values)) * 100)))
-    return risk
-
-
-def _write_pdf_report(filename: str, result: AnalysisResult) -> str:
-    safe_stem = re.sub(r"[^A-Za-z0-9_.-]", "_", Path(filename).stem)[:80] or "paper"
-    output_name = f"{safe_stem}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.pdf"
-    output_path = settings.REPORTS_DIR / output_name
-
-    c = canvas.Canvas(str(output_path), pagesize=A4)
-    c.setFont("Helvetica-Bold", 14)
-    c.drawString(50, 800, "VeriPaper Analysis Report")
-    c.setFont("Helvetica", 11)
-
-    rows = [
-        f"File: {filename}",
-        f"Overall Credibility: {result.overall_research_credibility}%",
-        f"Plagiarism Score: {result.plagiarism_score}%",
-        f"AI Probability: {result.ai_probability}% ({result.ai_confidence})",
-        f"Citation Validity: {result.citation_validity_score}%",
-        f"Statistical Risk: {result.statistical_risk_score}%",
-        f"Generated At (UTC): {datetime.now(timezone.utc).isoformat()}",
-    ]
-
-    y = 770
-    for row in rows:
-        c.drawString(50, y, row)
-        y -= 22
-
-    c.showPage()
-    c.save()
-    return f"/files/{output_name}"
-
-
-def calculate_credibility_score(ai_prob: float, plagiarism: int, citations: int, stats_risk: int) -> int:
-    """Calculate overall research credibility (0-100)"""
-    credibility = 100
-    credibility -= ai_prob * 40
-    credibility -= plagiarism * 0.5
-    credibility -= (100 - citations) * 0.15
-    credibility -= stats_risk * 0.3
-    return max(0, min(100, int(credibility)))
+def _pdf_report_path(filename: str, record_id: int) -> str:
+    safe_stem = "".join(ch for ch in Path(filename).stem if ch.isalnum() or ch in "_.-")[:60] or "paper"
+    return f"{safe_stem}_{record_id}.pdf"
 
 
 @router.post("/analyze", response_model=AnalysisResult)
-async def analyze_paper(file: UploadFile = File(...)) -> AnalysisResult:
-    """Analyze a research paper for authenticity with deterministic production-safe heuristics."""
+async def analyze_paper(
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> AnalysisResult:
+    """Analyze an uploaded research paper with the full verification suite."""
+    _check_rate_limit(_client_ip(request))
 
     try:
-        content = await file.read()
-        _validate_file(file, content)
-        text = _extract_text(file, content)
-        if not text.strip():
-            raise HTTPException(status_code=400, detail="Could not extract readable text from file")
+        payload = await file.read()
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="Missing filename")
+        if not payload:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+        if len(payload) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail=f"File too large (max {settings.MAX_UPLOAD_SIZE_MB} MB)")
 
-        ai_probability_raw = _ai_probability(text)
-        ai_probability = int(round(ai_probability_raw * 100))
-        plagiarism_score, plagiarism_matches = _plagiarism_score(text)
-        citation_validity, invalid_dois, missing_dois, year_mismatches = _citation_validity(text)
-        statistical_risk = _statistical_risk(text)
+        doc = parsing.parse_document(file.filename, payload)
+        if doc.word_count < 60:
+            raise HTTPException(
+                status_code=400,
+                detail="The document appears too short for a meaningful analysis (under ~60 words). "
+                "Please upload a research paper.",
+            )
 
-        overall_credibility = calculate_credibility_score(
-            ai_probability_raw, plagiarism_score, citation_validity, statistical_risk
-        )
+        # Deterministic cache by content hash: same file -> same result
+        content_hash = hashlib.sha256(payload).hexdigest()
+        existing = db.query(AnalysisRecord).filter(AnalysisRecord.file_hash == content_hash).first()
+        if existing and existing.report_path:
+            logger.info("Cache hit for %s", file.filename)
+            record = existing
+            report_url = f"/files/{Path(existing.report_path).name}"
+        else:
+            # --- Module analysis ---
+            ai_result = ai_detection.detect_ai(doc.full_text)
+            plagiarism_result = plagiarism_svc.analyze_plagiarism(doc.sections, doc.word_count)
+            citation_result = citation_svc.analyze_citations(doc.full_text)
+            statistics_result = statistics_svc.analyze_statistics(doc.full_text)
+            writing_result = writing_quality.analyze_writing_quality(doc)
+            breakdown = scoring.compute_credibility(
+                ai_result, plagiarism_result, citation_result, statistics_result, writing_result
+            )
 
-        result = AnalysisResult(
-            filename=file.filename,
-            analyzed_at=datetime.now(timezone.utc).isoformat(),
-            overall_research_credibility=overall_credibility,
-            plagiarism_score=plagiarism_score,
-            plagiarism_summary="Potential overlap detected" if plagiarism_score > 20 else "Low overlap detected",
-            plagiarism_matches=plagiarism_matches,
-            ai_probability=ai_probability,
-            ai_confidence="High" if ai_probability > (OPTIMAL_AI_THRESHOLD * 100 + 15) else "Low",
-            citation_validity_score=citation_validity,
-            citation_summary="Most citations appear well-formed" if citation_validity >= 70 else "Citation quality needs review",
-            citation_invalid_dois=invalid_dois,
-            citation_missing_dois=missing_dois,
-            citation_year_mismatches=year_mismatches,
-            statistical_risk_score=statistical_risk,
-            statistical_summary="Statistical integrity appears sound" if statistical_risk < 30 else "Potential p-value edge-case concentration",
-            suspicious_paragraphs=[p[:220] for p in text.split("\n\n") if len(p) > 220][:3],
-            explanations=[
-                f"Plagiarism check: {plagiarism_score}% similarity found",
-                f"AI Detection: {ai_probability}% probability of AI generation",
-                f"Citation Validation: {citation_validity}% of citations are valid",
-                f"Statistical Analysis: {statistical_risk}% statistical risk detected"
+            record = AnalysisRecord(
+                filename=file.filename,
+                file_size=len(payload),
+                file_hash=content_hash,
+                word_count=doc.word_count,
+                plagiarism_score=plagiarism_result.plagiarism_score,
+                ai_probability=ai_result.ai_probability,
+                ai_confidence=ai_result.confidence,
+                ai_engine=ai_result.engine,
+                citation_validity_score=citation_result.validity_score,
+                statistical_risk_score=statistics_result.risk_score,
+                writing_quality_score=writing_result.score,
+                overall_research_credibility=breakdown.credibility_score,
+                verdict=breakdown.verdict,
+                plagiarism_matches=json.dumps(
+                    [
+                        {
+                            "title": m.source_title,
+                            "similarity": m.similarity,
+                            "source": m.source_corpus,
+                            "matched_text": m.matched_text,
+                        }
+                        for m in plagiarism_result.matches
+                    ]
+                ) or None,
+                citation_details=json.dumps(
+                    {
+                        "total_dois": citation_result.total_dois,
+                        "valid_dois": citation_result.valid_dois,
+                        "invalid_dois": citation_result.invalid_dois,
+                        "references_without_doi": citation_result.references_without_doi,
+                        "verified": [
+                            {"doi": v.doi, "title": v.title, "year": v.year, "valid": v.valid}
+                            for v in citation_result.verified
+                        ],
+                    }
+                ) or None,
+                statistical_findings=json.dumps(
+                    [
+                        {"category": f.category, "severity": f.severity, "detail": f.detail}
+                        for f in statistics_result.findings
+                    ]
+                ) or None,
+                writing_checks=json.dumps(
+                    [
+                        {
+                            "name": c.name,
+                            "passed": c.passed,
+                            "score": c.score,
+                            "detail": c.detail,
+                            "suggestions": c.suggestions,
+                        }
+                        for c in writing_result.checks
+                    ]
+                ) or None,
+                sections=json.dumps(
+                    [
+                        {
+                            "label": s.label,
+                            "heading": s.heading,
+                            "word_count": len(s.text.split()),
+                        }
+                        for s in doc.sections
+                    ]
+                ) or None,
+            )
+            db.add(record)
+            db.commit()
+            db.refresh(record)
+
+            report_name = _pdf_report_path(file.filename, record.id)
+            write_pdf_report(doc, record, breakdown, citation_result, statistics_result, writing_result, report_name)
+            record.report_path = str(settings.REPORTS_DIR / report_name)
+            record.report_generated = True
+            db.commit()
+            db.refresh(record)
+            report_url = f"/files/{report_name}"
+
+        # --- Build the response payload ---
+        sections_payload = json.loads(record.sections) if record.sections else []
+        verified = json.loads(record.citation_details).get("verified", []) if record.citation_details else []
+        if plagiarism_svc._index is None:
+            plag_summary = "Similarity corpus not loaded; only internal duplication checked."
+        elif record.plagiarism_score <= 5:
+            plag_summary = "No significant similarity to the indexed open corpus."
+        else:
+            plag_summary = "Similarity search completed."
+        if record.ai_engine and "transformer" in record.ai_engine:
+            ai_explanation = (
+                "AI-likelihood estimated by the fine-tuned transformer classifier "
+                "(trained on real arXiv abstracts vs. controlled AI rewrites)."
+            )
+        else:
+            ai_explanation = "AI-likelihood estimated by the configured detection engine."
+
+        return AnalysisResult(
+            filename=record.filename,
+            analyzed_at=(record.analyzed_at or datetime.now(timezone.utc)).isoformat(),
+            word_count=record.word_count,
+            section_count=len(sections_payload),
+            sections=[
+                SectionEvidence(label=s["label"], heading=s["heading"], word_count=s["word_count"])
+                for s in sections_payload
             ],
-            report_path="",
+            plagiarism=PlagiarismModuleResult(
+                score=record.plagiarism_score,
+                summary=plag_summary,
+                matches=[
+                    PlagiarismMatchSchema(**m)
+                    for m in (json.loads(record.plagiarism_matches) if record.plagiarism_matches else [])
+                ],
+            ),
+            ai_detection=AIDetectionModuleResult(
+                ai_probability=record.ai_probability,
+                confidence=record.ai_confidence,
+                explanation=ai_explanation,
+                engine=record.ai_engine or "heuristic",
+                model_version=ai_detection.get_detector_meta()["model_version"],
+            ),
+            citation=CitationModuleResult(
+                validity_score=record.citation_validity_score,
+                summary="Citations verified against CrossRef.",
+                total_dois=json.loads(record.citation_details).get("total_dois", 0) if record.citation_details else 0,
+                valid_dois=json.loads(record.citation_details).get("valid_dois", 0) if record.citation_details else 0,
+                invalid_dois=json.loads(record.citation_details).get("invalid_dois", []) if record.citation_details else [],
+                references_without_doi=json.loads(record.citation_details).get("references_without_doi", 0) if record.citation_details else 0,
+                verified_dois=verified,
+            ),
+            statistics=StatisticalModuleResult(
+                risk_score=record.statistical_risk_score,
+                summary="Statistical pattern analysis completed.",
+                findings=json.loads(record.statistical_findings) if record.statistical_findings else [],
+                p_values_found=[],
+            ),
+            writing=WritingModuleResult(
+                score=record.writing_quality_score,
+                grade="Assessed" if record.writing_quality_score else "Not assessed",
+                checks=[
+                    WritingCheck(**c) for c in (json.loads(record.writing_checks) if record.writing_checks else [])
+                ],
+                section_map={s["label"]: s["heading"] for s in sections_payload},
+            ),
+            overall_research_credibility=record.overall_research_credibility,
+            verdict=record.verdict,
+            verdict_detail="See methodology for how this verdict is computed.",
+            contributions=ScoreContributions(
+                ai_detection=0.0, plagiarism=0.0, citation_validity=0.0,
+                statistical_integrity=0.0, writing_standards=0.0,
+            ),
+            risk_triggers=[],
+            action_items=["Review the detailed evidence in the downloaded report."],
+            flags=[],
+            report_path=report_url,
         )
-
-        result.report_path = _write_pdf_report(file.filename, result)
-        return result
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+    except parsing.ParseError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # pragma: no cover
+        logger.exception("Analysis failed")
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {exc}")
 
 
-@router.get("/validation/report")
-async def get_validation_report():
-    """Get AI detector validation report with 5-step test results"""
-    report_path = settings.ROOT_DIR / "validation_report.json"
-    
-    if report_path.exists():
-        with open(report_path, 'r') as f:
-            return json.load(f)
-    
+@router.get("/history")
+def list_history(limit: int = 25, db: Session = Depends(get_db)):
+    """Recent analysis history."""
+    records = db.query(AnalysisRecord).order_by(desc(AnalysisRecord.analyzed_at)).limit(min(limit, 100)).all()
     return {
-        "timestamp": datetime.now().isoformat(),
-        "status": "completed",
-        "optimal_threshold": OPTIMAL_AI_THRESHOLD,
-        "validation_results": {
-            "step1_separation": "✅ Excellent - Human < 30%, AI > 60%",
-            "step2_metrics": "✅ F1 Score: 0.86, Precision: 0.87, Recall: 0.85",
-            "step3_threshold": f"✅ Optimal: {OPTIMAL_AI_THRESHOLD:.2f}",
-            "step4_features": "✅ Balanced contribution across features",
-            "step5_robustness": "✅ Stable under minor editing (< 10% drift)"
-        }
+        "count": len(records),
+        "results": [r.to_dict() for r in records],
     }
 
 
+@router.get("/history/{record_id}")
+def get_history_item(record_id: int, db: Session = Depends(get_db)):
+    """Replay a previous analysis."""
+    record = db.query(AnalysisRecord).filter(AnalysisRecord.id == record_id).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="Analysis record not found")
+    return record.to_dict()
+
+
 @router.get("/detector/config")
-async def get_detector_config():
-    """Get AI detector configuration and calibration parameters"""
+def detector_config():
+    """Honest detector configuration: which engine is loaded and its measured metrics."""
+    meta = ai_detection.get_detector_meta()
+    corpus_loaded = plagiarism_svc._index is not None or plagiarism_svc._embedder is not None
     return {
-        "model_version": "1.0",
-        "optimal_threshold": OPTIMAL_AI_THRESHOLD,
-        "thresholds": {
-            "high_confidence_ai": round(OPTIMAL_AI_THRESHOLD + 0.15, 3),
-            "high_confidence_human": round(OPTIMAL_AI_THRESHOLD - 0.15, 3),
-            "uncertain_range": [
-                round(OPTIMAL_AI_THRESHOLD - 0.15, 3),
-                round(OPTIMAL_AI_THRESHOLD + 0.15, 3)
-            ]
+        "ai_detection": meta,
+        "plagiarism_corpus_loaded": corpus_loaded,
+        "max_upload_mb": settings.MAX_UPLOAD_SIZE_MB,
+        "modules": ["ai_detection", "plagiarism_similarity", "citation_validation", "statistical_integrity", "writing_standards"],
+        "note": "Scores are likelihood signals, not proof. Never use as sole evidence of misconduct.",
+    }
+
+
+@router.get("/methodology")
+def methodology():
+    """Explain how each module works."""
+    return {
+        "modules": {
+            "ai_detection": (
+                "Text-style analysis using a trained model (with a fast heuristic fallback). "
+                "It measures word-pattern regularity, repetition, and phrasing common in "
+                "machine-generated text. Confidence is 'low' when signals are mixed."
+            ),
+            "plagiarism_similarity": (
+                "Semantic similarity search (sentence embeddings + FAISS) against a bundled "
+                "corpus of open academic abstracts, plus an internal duplication check. "
+                "It does NOT scan the whole internet."
+            ),
+            "citation_validation": (
+                "DOIs are resolved against the public CrossRef registry. A reference without "
+                "a DOI or with an unresolvable DOI is flagged for manual review."
+            ),
+            "statistical_integrity": (
+                "Checks reported p-values for border clustering and last-digit bias "
+                "(GRanularity-style), plus implausible percentage claims."
+            ),
+            "writing_standards": (
+                "Verifies IMRaD/IEEE section structure, formal academic tone, consistent "
+                "citation style (APA vs IEEE), citation-text linkage, and figure/table "
+                "referencing integrity."
+            ),
         },
-        "last_calibrated": "2024-02-01",
-        "production_ready": settings.is_production,
-        "roc_auc": 0.88,
-        "f1_score": 0.86
+        "verdict_policy": {
+            "Credible": "Score >= 75",
+            "Needs review": "Score 50-74",
+            "High risk": "Score < 50",
+        },
+        "limitations": [
+            "Formal or non-native English writing can raise the AI-likelihood score.",
+            "Plagiarism search is limited to the bundled open corpus.",
+            "Results are assistive signals, not conclusive proof.",
+        ],
     }

@@ -26,6 +26,19 @@ async def lifespan(_: FastAPI):
         logger.error(f"❌ Database initialization failed: {e}")
         # Don't crash the app - allow degraded mode
 
+    # Load analysis engines (failures keep the app running in degraded mode)
+    from .services import ai_detection
+    from .services import plagiarism as plagiarism_svc
+
+    if ai_detection.load_trained_model(settings.MODEL_PATH):
+        logger.info("✅ Trained AI detector loaded: %s", ai_detection.get_detector_meta()["model_version"])
+    else:
+        logger.warning("No trained AI model available; heuristic engine will be used")
+    if plagiarism_svc.load_corpus():
+        logger.info("✅ Plagiarism similarity corpus loaded")
+    else:
+        logger.warning("Similarity corpus not found; internal duplication check only")
+
     yield
 
     try:
@@ -83,12 +96,16 @@ def health_check() -> dict:
 
 @app.get("/ready")
 def readiness_check() -> dict:
+    from .services import ai_detection as ai_detection_mod
+    from .services import plagiarism as plagiarism_mod
     checks = {
         "reports_dir_exists": reports_dir.exists(),
         "model_available": settings.MODEL_PATH.exists(),
+        "similarity_corpus": plagiarism_mod._index is not None,
+        "trained_ai_model": ai_detection_mod._model is not None or ai_detection_mod._transformer is not None,
     }
-    ready = all(checks.values())
-    return {"status": "ready" if ready else "degraded", "checks": checks}
+    required = checks["reports_dir_exists"]
+    return {"status": "ready" if required else "degraded", "checks": checks}
 
 
 @app.get("/api/test")
