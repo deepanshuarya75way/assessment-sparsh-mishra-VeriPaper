@@ -23,7 +23,15 @@ def test_readiness_endpoint() -> None:
 
 
 def test_analyze_text_file_success() -> None:
-    paper = b"""In this paper, we propose a robust method.\n\nReference: DOI 10.1000/xyz123\np < 0.04"""
+    paper = ("In this paper, we propose a robust method for evaluating document "
+             "quality through multi-factor analysis. Our approach combines semantic "
+             "embeddings with statistical feature extraction to produce a credibility "
+             "score for research papers. We evaluate the proposed framework on a "
+             "diverse set of academic documents and demonstrate consistent "
+             "performance across multiple domains. The results indicate that "
+             "combining textual and structural features improves detection "
+             "accuracy significantly. We report an overall accuracy of 85 percent "
+             "on held-out evaluation data.\n\nReference: DOI 10.1000/xyz123\n" "p < 0.04")
     response = client.post(
         "/api/analyze",
         files={"file": ("sample.txt", paper, "text/plain")},
