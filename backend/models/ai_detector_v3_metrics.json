@@ -1,0 +1,4 @@
+{
+  "engine": "stylometric_char_lr",
+  "cv_f1": 0.5459
+}

@@ -1,0 +1,5 @@
+{
+  "engine": "logistic_regression",
+  "cv_f1": 0.3328,
+  "trained_on": "arxiv abstracts + controlled AI variants"
+}
