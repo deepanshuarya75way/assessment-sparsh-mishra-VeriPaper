@@ -15,3 +15,13 @@ export async function analyzePaper(file) {
   });
   return response.data;
 }
+
+export async function fetchHistory() {
+  const response = await api.get("/history");
+  return response.data;
+}
+
+export async function fetchConfig() {
+  const response = await api.get("/detector/config");
+  return response.data;
+}

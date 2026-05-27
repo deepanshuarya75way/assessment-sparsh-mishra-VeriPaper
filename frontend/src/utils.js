@@ -25,18 +25,21 @@ export function downloadPDF(reportPath) {
  */
 export function downloadCSV(result) {
   const headers = ["Metric", "Score", "Details"];
-  
+
   const rows = [
-    ["Overall Research Credibility", `${result.overall_research_credibility}%`, ""],
-    ["Plagiarism Score", `${result.plagiarism_score}%`, result.plagiarism_summary],
-    ["AI-Generated Probability", `${result.ai_probability}%`, `Confidence: ${result.ai_confidence}`],
-    ["Citation Validity", `${result.citation_validity_score}%`, result.citation_summary],
-    ["Statistical Risk", `${result.statistical_risk_score}%`, result.statistical_summary],
+    ["Overall Research Credibility", `${result.overall_research_credibility}%`, result.verdict_detail || ""],
+    ["Plagiarism / Similarity", `${Math.round(result.plagiarism?.score ?? 0)}%`, result.plagiarism?.summary || ""],
+    ["AI-Generated Probability", `${Math.round(result.ai_detection?.ai_probability ?? 0)}%`, `Confidence: ${result.ai_detection?.confidence || ""}`],
+    ["Citation Validity", `${Math.round(result.citation?.validity_score ?? 0)}%`, result.citation?.summary || ""],
+    ["Statistical Risk", `${Math.round(result.statistics?.risk_score ?? 0)}%`, result.statistics?.summary || ""],
+    ["Writing Standards", `${Math.round(result.writing?.score ?? 0)}%`, result.writing?.grade || ""],
     ["", "", ""],
-    ["Invalid DOIs Found", result.citation_invalid_dois?.length || 0, result.citation_invalid_dois?.join("; ") || ""],
-    ["Missing DOIs", result.citation_missing_dois?.length || 0, ""],
-    ["Year Mismatches", result.citation_year_mismatches?.length || 0, result.citation_year_mismatches?.join("; ") || ""],
-    ["Top Plagiarism Match", result.plagiarism_matches?.[0]?.similarity + "%" || "N/A", result.plagiarism_matches?.[0]?.title || ""],
+    ["Word Count", result.word_count || "", ""],
+    ["Sections Detected", result.section_count || "", ""],
+    ["Duplicate Paragraphs (self-plagiarism)", result.plagiarism?.duplicate_paragraphs ?? 0, ""],
+    ["Valid DOIs", result.citation?.valid_dois ?? 0, `of ${result.citation?.total_dois ?? 0} total`],
+    ["Invalid DOIs Found", (result.citation?.invalid_dois || []).length, (result.citation?.invalid_dois || []).join("; ")],
+    ["Top Plagiarism Match", result.plagiarism?.matches?.[0]?.similarity ? `${Math.round(result.plagiarism.matches[0].similarity)}%` : "N/A", result.plagiarism?.matches?.[0]?.title || ""],
   ];
 
   const csv = [
