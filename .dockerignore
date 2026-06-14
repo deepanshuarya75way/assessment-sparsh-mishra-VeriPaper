@@ -10,3 +10,9 @@ venv/
 node_modules/
 .DS_Store
 .git
+frontend/node_modules/
+*.sqlite
+reports/
+*.log
+.venv/
+.env

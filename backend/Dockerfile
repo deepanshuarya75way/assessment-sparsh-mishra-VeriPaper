@@ -13,7 +13,6 @@ RUN apt-get update \
     liblapacke-dev \
     pkg-config \
     curl \
-    postgresql-client \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -24,17 +23,25 @@ COPY requirements.txt pyproject.toml ./
 RUN python -m pip install --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY . /app
+# Pre-baked model artifacts (transformer detector + LR fallback)
+COPY models/ models/
 
-# Create reports directory
+# Corpus data (arXiv abstracts used by the similarity search) and samples
+COPY data/ data/
+
+# Application code
+COPY app/ app/
+
+# Pre-built frontend (mounted under /static by the API)
+COPY frontend/dist/ frontend/dist/
+
 RUN mkdir -p /app/reports
 
 # Expose API port
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+# Health check — Render free tier requires a passing check within ~90s
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Start uvicorn server

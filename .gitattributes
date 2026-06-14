@@ -1,0 +1,4 @@
+backend/models/ai_detector_transformer/*.safetensors filter=lfs diff=lfs merge=lfs -text
+backend/models/**/*.safetensors filter=lfs diff=lfs merge=lfs -text
+backend/models/*.joblib filter=lfs diff=lfs merge=lfs -text
+backend/models/*.bin filter=lfs diff=lfs merge=lfs -text

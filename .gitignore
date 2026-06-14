@@ -50,9 +50,8 @@ logs/
 # node_modules/
 
 # Build outputs
-frontend/dist/
+# frontend/dist/ (committed production bundle)
 backend/models/*.pkl
-backend/models/*.joblib
 reports/*.pdf
 
 # Data files (optional - comment out if you want to include sample data)
