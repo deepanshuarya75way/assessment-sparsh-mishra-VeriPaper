@@ -55,7 +55,9 @@ COPY backend/data/ backend/data/
 
 # Frontend source + build it once (snapshot for the /static mount)
 COPY backend/frontend/ backend/frontend/
-RUN cd backend/frontend && rm -rf dist && npm ci && npm run build \
+# Build the frontend with the production asset base path (/static/) so that the
+# FastAPI StaticFiles mount serves JS/CSS chunks the index.html actually asks for.
+RUN cd backend/frontend && rm -rf dist && npm ci && npm run build:prod \
  && rm -rf node_modules package-lock.json
 
 # Application code (kept last so code edits don't bust the pip/model cache)

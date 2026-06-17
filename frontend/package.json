@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build", "build:prod": "VITE_BASE_PATH=/static/ vite build",
     "preview": "vite preview"
   },
   "dependencies": {
