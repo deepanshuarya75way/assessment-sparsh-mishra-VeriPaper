@@ -87,7 +87,7 @@ export function saveToHistory(result) {
       timestamp: new Date().toISOString(),
       id: `analysis_${Date.now()}`
     };
-    const updated = [entry, ...history].slice(0, 10);
+    const updated = [entry, ...history].slice(0, 10); // history guaranteed an array by getHistory()
     localStorage.setItem("veripaper_history", JSON.stringify(updated));
   } catch (e) {
     console.error("Failed to save history:", e);
@@ -100,7 +100,9 @@ export function saveToHistory(result) {
 export function getHistory() {
   try {
     const stored = localStorage.getItem("veripaper_history");
-    return stored ? JSON.parse(stored) : [];
+    if (!stored) return [];
+    const parsed = JSON.parse(stored);
+    return Array.isArray(parsed) ? parsed : [];
   } catch (e) {
     console.error("Failed to parse history:", e);
     return [];

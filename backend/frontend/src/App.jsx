@@ -247,7 +247,9 @@ export default function App() {
 
   useEffect(() => {
     fetchConfig().then(setConfig).catch(() => {});
-    fetchHistory().then(setServerHistory).catch(() => {});
+    fetchHistory()
+      .then((data) => setServerHistory(Array.isArray(data) ? data : data?.results ?? []))
+      .catch(() => {});
     if (!localStorage.getItem("veripaper_onboarded")) {
       setShowOnboard(true);
     }
