@@ -21,6 +21,11 @@ export async function fetchHistory() {
   return response.data;
 }
 
+export async function fetchHistoryItem(recordId) {
+  const response = await api.get(`/history/${recordId}`);
+  return response.data;
+}
+
 export async function fetchConfig() {
   const response = await api.get("/detector/config");
   return response.data;

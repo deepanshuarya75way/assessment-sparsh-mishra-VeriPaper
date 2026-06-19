@@ -1,10 +1,27 @@
-import { useEffect, useMemo, useState } from "react";
-import { analyzePaper, fetchHistory, fetchConfig } from "./api";
+import { Component, useEffect, useMemo, useState } from "react";
+import { analyzePaper, fetchHistory, fetchHistoryItem, fetchConfig } from "./api";
 import { downloadPDF, downloadCSV, downloadJSON, saveToHistory, getHistory, clearHistory } from "./utils";
 
 /* ------------------------------------------------------------------ */
-/* Plain-language helpers — every number on the UI is explained.       */
+/* Error boundary — a panel crash shows a friendly message, never a   */
+/* blank screen.                                                       */
 /* ------------------------------------------------------------------ */
+
+class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { err: null };
+  }
+  static getDerivedStateFromError(err) {
+    return { err };
+  }
+  render() {
+    if (this.state.err) {
+      return (this.props.fallback || (() => null))(this.state.err);
+    }
+    return this.props.children;
+  }
+}
 
 const VERDICT_META = {
   "Credible": { badge: "bg-emerald-100 text-emerald-800 border-emerald-200", title: "Looks Credible", desc: "This paper passes the checks well. It can move forward in review, keeping in mind these are likelihood signals, not proof." },
@@ -233,6 +250,55 @@ function WritingPanel({ data }) {
 /* Main App                                                            */
 /* ------------------------------------------------------------------ */
 
+/* Rebuild the nested result shape from a flat history record so the
+   module panels can render a replay without crashing on undefined data. */
+
+function flatRecordToResult(record) {
+  const score = (v, fallback = 0) => (typeof v === "number" && Number.isFinite(v) ? v : fallback);
+  return {
+    id: record.id,
+    filename: record.filename,
+    word_count: record.word_count,
+    section_count: 0,
+    sections: [],
+    overall_research_credibility: score(record.overall_research_credibility),
+    verdict: record.verdict,
+    report_path: record.report_path,
+    analyzed_at: record.analyzed_at,
+    action_items: [],
+    risk_triggers: [],
+    plagiarism: {
+      score: score(record.plagiarism_score),
+      summary: "Replay of a stored analysis — detailed source matches are not kept after the original scan completes (papers are never permanently stored).",
+      matches: [],
+      duplicate_paragraphs: 0,
+    },
+    ai_detection: {
+      ai_probability: score(record.ai_probability),
+      confidence: record.ai_confidence,
+      engine: record.ai_engine,
+    },
+    citation: {
+      validity_score: score(record.citation_validity_score),
+      summary: "Replay of a stored analysis — per-reference details are not kept after the original scan completes.",
+      total_dois: 0,
+      valid_dois: 0,
+      invalid_dois: [],
+      references_without_doi: 0,
+      verified_dois: [],
+    },
+    statistics: {
+      risk_score: 100 - score(record.statistical_risk_score),
+      summary: "Replay of a stored analysis — numeric findings are not kept after the original scan completes.",
+      findings: [],
+    },
+    writing: {
+      score: score(record.writing_quality_score),
+      checks: [],
+    },
+  };
+}
+
 export default function App() {
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -244,6 +310,17 @@ export default function App() {
   const [serverHistory, setServerHistory] = useState([]);
   const [localHistory] = useState(getHistory());
   const [showOnboard, setShowOnboard] = useState(false);
+  const [replayError, setReplayError] = useState("");
+  const [replayLoading, setReplayLoading] = useState(false);
+
+  const modulePanelFallback = () => (
+    <div className="p-6 text-center">
+      <p className="text-sm font-medium text-slate-900">This detail could not be shown</p>
+      <p className="text-xs text-slate-500 mt-2 max-w-md mx-auto">
+        The detailed data for this older analysis is not kept on the server (papers are never stored). The overview scores above are still accurate — for a full replay, re-upload the paper.
+      </p>
+    </div>
+  );
 
   useEffect(() => {
     fetchConfig().then(setConfig).catch(() => {});
@@ -301,8 +378,20 @@ export default function App() {
     }
   };
 
-  const openOld = (entry) => {
-    setResult({ ...entry.result, report_path: entry.result?.report_path });
+  const openOld = async (entry) => {
+    setError("");
+    setReplayError("");
+    setReplayLoading(true);
+    try {
+      const record = await fetchHistoryItem(entry.id);
+      setResult(flatRecordToResult(record));
+      setOpenModule("ai_detection");
+    } catch (err) {
+      const msg = err.response?.data?.detail || err.message || "Could not open this analysis.";
+      setReplayError(typeof msg === "string" ? msg : String(msg));
+    } finally {
+      setReplayLoading(false);
+    }
   };
 
   return (
@@ -415,6 +504,7 @@ export default function App() {
             </div>
 
             {/* Module detail */}
+            <ErrorBoundary fallback={modulePanelFallback}>
             <div className="card bg-white border border-slate-200 shadow-sm">
               <div className="flex items-start justify-between flex-wrap gap-3 border-b border-slate-100 pb-4 mb-4">
                 <div>
@@ -432,6 +522,7 @@ export default function App() {
               {openModule === "statistics" && <StatisticsPanel data={result.statistics} />}
               {openModule === "writing" && <WritingPanel data={result.writing} />}
             </div>
+            </ErrorBoundary>
 
             {/* Sections & exports */}
             <div className="grid lg:grid-cols-[1fr_320px] gap-6">
@@ -467,7 +558,8 @@ export default function App() {
                 <button
                   key={h.id || i}
                   onClick={() => openOld(h)}
-                  className="w-full text-left flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200 hover:border-blue-300 hover:bg-blue-50 transition-colors"
+                  className="w-full text-left flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200 hover:border-blue-300 hover:bg-blue-50 transition-colors disabled:opacity-60"
+                  disabled={replayLoading}
                 >
                   <div>
                     <p className="text-sm font-medium text-slate-900">{h.filename}</p>
@@ -477,6 +569,12 @@ export default function App() {
                 </button>
               ))}
             </div>
+          )}
+          {replayError && (
+            <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg p-3 mt-3">{replayError}</p>
+          )}
+          {replayLoading && (
+            <p className="text-xs text-slate-500 mt-3">Opening previous analysis…</p>
           )}
           {localHistory.length > 0 && (
             <p className="text-[11px] text-slate-400 mt-3">Also saved locally in this browser ({localHistory.length} entries).</p>
