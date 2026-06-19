@@ -329,13 +329,13 @@ export default function App() {
         {/* Hero */}
         <section className="text-center max-w-2xl mx-auto">
           <span className="inline-block text-xs font-semibold px-3 py-1 rounded-full bg-blue-100 text-blue-700 mb-4">
-            5-in-1 research paper verification
+            ✦ VeriPaper — the 5-in-1 integrity check
           </span>
           <h1 className="text-3xl sm:text-4xl font-black text-slate-900 tracking-tight">
-            Verify a research paper in seconds
+            Is your research paper really <span className="text-blue-600">credible?</span>
           </h1>
           <p className="text-slate-600 mt-3">
-            Plagiarism, AI authorship, citation authenticity, statistical integrity, and academic writing standards — analyzed together, explained in plain language.
+            One upload. Five checks: plagiarism, AI authorship, citation authenticity, statistical integrity, and academic writing standards — every result explained in plain language.
           </p>
         </section>
 
