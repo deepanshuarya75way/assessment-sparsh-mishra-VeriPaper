@@ -228,6 +228,11 @@ def _onnx_session(model_path: str) -> "Optional[InferenceSession]":
     providers = ["CPUExecutionProvider"]
     sess_options = ort.SessionOptions()
     sess_options.intra_op_num_threads = 1
+    # Memory tuning for the 512 MB free tier: disable ORT's aggressive memory
+    # pre-allocation so each session keeps its footprint small and stable under
+    # concurrent inference instead of ballooning and triggering a fallback.
+    sess_options.enable_mem_pattern = False
+    sess_options.enable_cpu_mem_arena = False
     try:
         return ort.InferenceSession(str(onnx_path), sess_options, providers=providers)
     except Exception as exc:
