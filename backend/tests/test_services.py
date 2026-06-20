@@ -1,8 +1,13 @@
 """Production tests for the VeriPaper analysis services."""
 import sys
+from pathlib import Path
+
 import pytest
 
-sys.path.insert(0, "/home/ubuntu/VeriPaper/backend")
+# Portable resolution: works on local sandboxes and GitHub Actions runners.
+_backend = Path(__file__).resolve().parents[1]
+if str(_backend) not in sys.path:
+    sys.path.insert(0, str(_backend))
 
 from app.services import parsing
 from app.services import ai_detection
@@ -15,9 +20,11 @@ from app.services import scoring
 
 # ---------------- Parsing ----------------
 
-SAMPLE_PDF = "/tmp/fresh_paper.pdf"
-SAMPLE_TXT = "/tmp/fresh_paper.txt"
-SAMPLE_DOCX = "/tmp/fresh_paper.docx"
+# Committed sample papers live under backend/data/ so tests run anywhere
+# (GitHub Actions, CI, or a fresh checkout) without local /tmp artifacts.
+SAMPLE_PDF = str(_backend / "data" / "sample_paper.pdf")
+SAMPLE_TXT = str(_backend / "data" / "sample_paper.txt")
+SAMPLE_DOCX = str(_backend / "data" / "sample_paper.docx")
 
 
 @pytest.mark.parametrize(
