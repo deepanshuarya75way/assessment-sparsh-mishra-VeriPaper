@@ -16,6 +16,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi import Request
+from fastapi import BackgroundTasks
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
@@ -217,7 +218,7 @@ async def analyze_paper(
         else:
             ai_explanation = "AI-likelihood estimated by the configured detection engine."
 
-        return AnalysisResult(
+        result = AnalysisResult(
             filename=record.filename,
             analyzed_at=(record.analyzed_at or datetime.now(timezone.utc)).isoformat(),
             word_count=record.word_count,
@@ -277,6 +278,7 @@ async def analyze_paper(
             report_path=report_url,
             download_url=report_url,
         )
+        return result
     except HTTPException:
         raise
     except parsing.ParseError as exc:
@@ -284,6 +286,322 @@ async def analyze_paper(
     except Exception as exc:  # pragma: no cover
         logger.exception("Analysis failed")
         raise HTTPException(status_code=500, detail=f"Analysis failed: {exc}")
+
+
+# --- Asynchronous analysis queue (BackgroundTasks) ---
+# Shared in-memory task store: task_id -> {"status": "queued"|"processing"|"done"|"error", "result": ...}
+_task_store: dict = {}
+
+
+@router.post("/analyze/async")
+async def analyze_paper_async(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """Start an asynchronous analysis. Returns immediately with a task_id.
+    
+    Client should poll GET /api/analyze/{task_id}/status until status == "done"."""
+    _check_rate_limit(_client_ip(request))
+
+    try:
+        payload = await file.read()
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="Missing filename")
+        if not payload:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+        if len(payload) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail=f"File too large (max {settings.MAX_UPLOAD_SIZE_MB} MB)")
+
+        # Deterministic cache by content hash: same file -> same result
+        content_hash = hashlib.sha256(payload).hexdigest()
+        existing = db.query(AnalysisRecord).filter(AnalysisRecord.file_hash == content_hash).first()
+        if existing and existing.report_path:
+            logger.info("Cache hit for %s", file.filename)
+            record = existing
+            report_url = f"/files/{Path(existing.report_path).name}"
+        else:
+            # Parse document to get filename for the record
+            doc = parsing.parse_document(file.filename, payload)
+            if doc.word_count < 60:
+                raise HTTPException(
+                    status_code=400,
+                    detail="The document appears too short for a meaningful analysis (under ~60 words). "
+                    "Please upload a research paper.",
+                )
+            # Create a placeholder record so we have an ID
+            record = AnalysisRecord(
+                filename=file.filename,
+                file_size=len(payload),
+                file_hash=content_hash,
+                word_count=doc.word_count,
+                plagiarism_score=0.0,
+                ai_probability=0.0,
+                ai_confidence=0.0,
+                ai_engine=None,
+                citation_validity_score=0.0,
+                statistical_risk_score=0.0,
+                writing_quality_score=0.0,
+                overall_research_credibility=0.0,
+                verdict="pending",
+            )
+            db.add(record)
+            db.commit()
+            db.refresh(record)
+
+        import uuid
+        task_id = str(uuid.uuid4())
+        _task_store[task_id] = {
+            "status": "queued",
+            "record_id": record.id,
+            "result": None,
+            "report_url": report_url if (existing and existing.report_path) else None,
+            "payload": payload,
+            "filename": file.filename,
+            "content_hash": content_hash,
+            "is_cache_hit": existing is not None and existing.report_path is not None,
+        }
+        background_tasks.add_task(_process_analysis_task, task_id)
+        return {"task_id": task_id, "status": "queued", "message": "Analysis started. Poll /api/analyze/{task_id}/status."}
+    except HTTPException:
+        raise
+    except parsing.ParseError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.exception("Async analysis start failed")
+        raise HTTPException(status_code=500, detail=f"Analysis start failed: {exc}")
+
+
+@router.get("/analyze/{task_id}/status")
+def get_analysis_status(task_id: str, db: Session = Depends(get_db)):
+    """Poll the status of an async analysis. Returns status and full result when done."""
+    task = _task_store.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found or expired")
+
+    if task["status"] == "done" and task["result"]:
+        return {
+            "status": "done",
+            "record_id": task["record_id"],
+            "result": task["result"],
+        }
+    elif task["status"] == "error":
+        return {"status": "error", "error": task.get("error", "Unknown error")}
+    elif task["status"] == "processing":
+        return {"status": "processing", "message": "Analysis in progress..."}
+    else:
+        return {"status": "queued", "message": "Waiting to start..."}
+
+
+async def _process_analysis_task(task_id: str):
+    """Background worker: performs the full 5-module analysis."""
+    import uuid as uuid_mod
+    from ..services import (
+        ai_detection,
+        citations as citation_svc,
+        parsing,
+        plagiarism as plagiarism_svc,
+        scoring,
+        statistics as statistics_svc,
+        writing_quality,
+    )
+    from ..services.report import write_pdf_report
+
+    task = _task_store.get(task_id)
+    if not task:
+        return
+
+    task["status"] = "processing"
+
+    try:
+        if task["is_cache_hit"]:
+            task["status"] = "done"
+            record = None  # Will be fetched below
+            # Build response from existing record
+            with next(get_db()) as db:
+                record = db.query(AnalysisRecord).filter(AnalysisRecord.id == task["record_id"]).first()
+            task["result"] = _build_response(record, ai_detection, plagiarism_svc, json)
+        else:
+            payload = task["payload"]
+            filename = task["filename"]
+            doc = parsing.parse_document(filename, payload)
+
+            ai_result = ai_detection.detect_ai(doc.full_text)
+            plagiarism_result = plagiarism_svc.analyze_plagiarism(doc.sections, doc.word_count)
+            citation_result = citation_svc.analyze_citations(doc.full_text)
+            statistics_result = statistics_svc.analyze_statistics(doc.full_text)
+            writing_result = writing_quality.analyze_writing_quality(doc)
+            breakdown = scoring.compute_credibility(
+                ai_result, plagiarism_result, citation_result, statistics_result, writing_result
+            )
+
+            with next(get_db()) as db:
+                record = db.query(AnalysisRecord).filter(AnalysisRecord.id == task["record_id"]).first()
+                if not record:
+                    task["status"] = "error"
+                    task["error"] = "Record not found"
+                    return
+                record.plagiarism_score = plagiarism_result.plagiarism_score
+                record.ai_probability = ai_result.ai_probability
+                record.ai_confidence = ai_result.confidence
+                record.ai_engine = ai_result.engine
+                record.citation_validity_score = citation_result.validity_score
+                record.statistical_risk_score = statistics_result.risk_score
+                record.writing_quality_score = writing_result.score
+                record.overall_research_credibility = breakdown.credibility_score
+                record.verdict = breakdown.verdict
+                record.plagiarism_matches = json.dumps(
+                    [
+                        {
+                            "title": m.source_title,
+                            "similarity": m.similarity,
+                            "source": m.source_corpus,
+                            "matched_text": m.matched_text,
+                        }
+                        for m in plagiarism_result.matches
+                    ]
+                ) or None
+                record.citation_details = json.dumps(
+                    {
+                        "total_dois": citation_result.total_dois,
+                        "valid_dois": citation_result.valid_dois,
+                        "invalid_dois": citation_result.invalid_dois,
+                        "references_without_doi": citation_result.references_without_doi,
+                        "verified": [
+                            {"doi": v.doi, "title": v.title, "year": v.year, "valid": v.valid}
+                            for v in citation_result.verified
+                        ],
+                    }
+                ) or None
+                record.statistical_findings = json.dumps(
+                    [
+                        {"category": f.category, "severity": f.severity, "detail": f.detail}
+                        for f in statistics_result.findings
+                    ]
+                ) or None
+                record.writing_checks = json.dumps(
+                    [
+                        {
+                            "name": c.name,
+                            "passed": c.passed,
+                            "score": c.score,
+                            "detail": c.detail,
+                            "suggestions": c.suggestions,
+                        }
+                        for c in writing_result.checks
+                    ]
+                ) or None
+                record.sections = json.dumps(
+                    [
+                        {
+                            "label": s.label,
+                            "heading": s.heading,
+                            "word_count": len(s.text.split()),
+                        }
+                        for s in doc.sections
+                    ]
+                ) or None
+                db.commit()
+                db.refresh(record)
+
+                report_name = _pdf_report_path(filename, record.id)
+                write_pdf_report(doc, record, breakdown, citation_result, statistics_result, writing_result, report_name)
+                record.report_path = str(settings.REPORTS_DIR / report_name)
+                record.report_generated = True
+                db.commit()
+                db.refresh(record)
+                task["report_url"] = f"/files/{report_name}"
+
+            task["result"] = _build_response(record, ai_detection, plagiarism_svc, json)
+            task["status"] = "done"
+
+        # Clean up payload from memory
+        task["payload"] = None
+    except Exception as exc:
+        logger.exception("Async analysis task failed for %s", task_id)
+        task["status"] = "error"
+        task["error"] = str(exc)
+        task["payload"] = None
+
+
+def _build_response(record, ai_detection, plagiarism_svc, json):
+    """Build the AnalysisResult dict from a DB record (extracted for reuse by async)."""
+    sections_payload = json.loads(record.sections) if record.sections else []
+    verified = json.loads(record.citation_details).get("verified", []) if record.citation_details else []
+    if not plagiarism_svc._corpus_loaded:
+        plag_summary = "Similarity corpus not loaded; only internal duplication checked."
+    elif record.plagiarism_score <= 5:
+        plag_summary = "No significant similarity to the indexed open corpus."
+    else:
+        plag_summary = "Similarity search completed."
+    if record.ai_engine and "transformer" in str(record.ai_engine):
+        ai_explanation = (
+            "AI-likelihood estimated by the fine-tuned transformer classifier "
+            "(trained on real arXiv abstracts vs. controlled AI rewrites)."
+        )
+    else:
+        ai_explanation = "AI-likelihood estimated by the configured detection engine."
+
+    report_url = task_report_url = f"/files/{Path(record.report_path).name}" if record.report_path else None
+
+    return {
+        "filename": record.filename,
+        "analyzed_at": (record.analyzed_at or datetime.now(timezone.utc)).isoformat(),
+        "word_count": record.word_count,
+        "section_count": len(sections_payload),
+        "sections": [
+            {"label": s["label"], "heading": s["heading"], "word_count": s["word_count"]}
+            for s in sections_payload
+        ],
+        "plagiarism": {
+            "score": record.plagiarism_score,
+            "summary": plag_summary,
+            "matches": json.loads(record.plagiarism_matches) if record.plagiarism_matches else [],
+        },
+        "ai_detection": {
+            "ai_probability": record.ai_probability,
+            "confidence": record.ai_confidence,
+            "explanation": ai_explanation,
+            "engine": record.ai_engine or "heuristic",
+            "model_version": ai_detection.get_detector_meta()["model_version"],
+        },
+        "citation": {
+            "validity_score": record.citation_validity_score,
+            "summary": "Citations verified against CrossRef.",
+            "total_dois": json.loads(record.citation_details).get("total_dois", 0) if record.citation_details else 0,
+            "valid_dois": json.loads(record.citation_details).get("valid_dois", 0) if record.citation_details else 0,
+            "invalid_dois": json.loads(record.citation_details).get("invalid_dois", []) if record.citation_details else [],
+            "references_without_doi": json.loads(record.citation_details).get("references_without_doi", 0) if record.citation_details else 0,
+            "verified_dois": verified,
+        },
+        "statistics": {
+            "risk_score": record.statistical_risk_score,
+            "summary": "Statistical pattern analysis completed.",
+            "findings": json.loads(record.statistical_findings) if record.statistical_findings else [],
+            "p_values_found": [],
+        },
+        "writing": {
+            "score": record.writing_quality_score,
+            "grade": "Assessed" if record.writing_quality_score else "Not assessed",
+            "checks": json.loads(record.writing_checks) if record.writing_checks else [],
+            "section_map": {s["label"]: s["heading"] for s in sections_payload},
+        },
+        "overall_research_credibility": record.overall_research_credibility,
+        "verdict": record.verdict,
+        "verdict_detail": "See methodology for how this verdict is computed.",
+        "contributions": {
+            "ai_detection": 0.0, "plagiarism": 0.0, "citation_validity": 0.0,
+            "statistical_integrity": 0.0, "writing_standards": 0.0,
+        },
+        "risk_triggers": [],
+        "action_items": ["Review the detailed evidence in the downloaded report."],
+        "flags": [],
+        "report_path": report_url,
+        "download_url": report_url,
+    }
+
+
 
 
 @router.get("/history")

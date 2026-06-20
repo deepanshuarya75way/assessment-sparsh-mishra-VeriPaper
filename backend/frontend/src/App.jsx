@@ -1,5 +1,5 @@
 import { Component, useEffect, useMemo, useState } from "react";
-import { analyzePaper, fetchHistory, fetchHistoryItem, fetchConfig } from "./api";
+import { analyzePaper, analyzePaperAsync, pollUntilDone, fetchHistory, fetchHistoryItem, fetchConfig } from "./api";
 import { downloadPDF, downloadCSV, downloadJSON, saveToHistory, getHistory, clearHistory } from "./utils";
 
 /* ------------------------------------------------------------------ */
@@ -354,13 +354,24 @@ export default function App() {
     setResult(null);
     setProgress(8);
 
-    const timers = [
-      setTimeout(() => setProgress(30), 400),
-      setTimeout(() => setProgress(55), 1500),
-      setTimeout(() => setProgress(80), 3000),
-    ];
+    const timers = [];
     try {
-      const data = await analyzePaper(file);
+      // Start async analysis
+      setProgress(10);
+      const { task_id } = await analyzePaperAsync(file);
+
+      // Poll for completion with progress feedback
+      const resultData = await pollUntilDone(
+        task_id,
+        (status) => {
+          if (status.status === "queued") setProgress(15);
+          else if (status.status === "processing") setProgress(50);
+        },
+        800,
+        120000
+      );
+
+      const data = resultData.result;
       setProgress(100);
       setResult(data);
       saveToHistory(data);
