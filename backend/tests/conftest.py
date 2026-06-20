@@ -1,9 +1,14 @@
 """Shared fixtures: preload the analysis engines so service and API tests use the real models."""
 import sys
+from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, "/home/ubuntu/VeriPaper/backend")
+# Works both on local sandboxes and GitHub Actions runners: resolve the
+# repository root relative to this file (backend/tests/ -> ../..).
+_root = Path(__file__).resolve().parents[2]
+if str(_root / "backend") not in sys.path:
+    sys.path.insert(0, str(_root / "backend"))
 
 from app.core.config import settings
 
