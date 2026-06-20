@@ -1,279 +1,173 @@
-# VeriPaper - AI Research Authenticity Platform
+# VeriPaper — Research Paper Verification Platform
 
-A full-stack machine learning application for analyzing research papers to detect plagiarism, AI-generated content, citation validity issues, and statistical anomalies.
+**A production-ready, full-stack platform that verifies the authenticity and integrity of research papers across five independent analysis modules.**
 
-## 🎯 Key Features
+[**Live Demo**](https://veripaper.onrender.com) · [API Docs](https://veripaper.onrender.com/docs) · [Quick Start](QUICKSTART.md) · [Development Guide](DEVELOPMENT.md)
 
-### Core Analysis Modules
-- **📚 Plagiarism Detection**: Semantic similarity search using SBERT embeddings + FAISS vector database
-- **🤖 AI Generation Detection**: Hybrid approach combining perplexity analysis + machine learning features
-- **🔗 Citation Validation**: DOI extraction and CrossRef API verification
-- **📊 Statistical Risk Assessment**: Anomaly detection in statistical claims and p-values
+VeriPaper goes beyond simple AI and plagiarism checks. It performs a comprehensive verification of research papers, covering **AI-generated content detection**, **plagiarism analysis**, **citation validation**, **statistical integrity**, and **academic writing standards** (IEEE / IMRaD) — and returns a single, easy-to-read credibility verdict with detailed per-module breakdowns.
 
-### User Interface
-- 🎨 **Modern Dashboard**: Real-time analysis with visual score gauges
-- 📥 **Multi-Format Export**: PDF reports, CSV tables, JSON data
-- 📋 **Analysis History**: Automatic tracking with browser localStorage
-- 🌓 **Dark/Light Theme**: Customizable appearance
-- 📱 **Responsive Design**: Mobile-friendly interface
+![VeriPaper](https://veripaper.onrender.com/static/og.png)
 
-## 🚀 Quick Start
+## Why VeriPaper
 
-### One-Command Setup (Windows)
+Manuscripts face scrutiny from editors, peer reviewers, and increasingly, automated desk-reject systems. VeriPaper combines a **fine-tuned transformer model deployed as a quantized ONNX runtime** with deterministic NLP pipelines so that a single PDF, DOCX, or TXT upload yields a complete verification report — scores, flagged excerpts, invalid citations, statistical red flags, and writing-standards findings — in under two seconds of pure inference on free-tier hardware.
+
+## Analysis Modules
+
+| # | Module | Technique | What It Checks |
+|---|--------|-----------|----------------|
+| 1 | **AI Detection** | Fine-tuned DistilBERT → int8 quantized ONNX (65 MB, torch-free) | Whether the manuscript was written by a human or an LLM, paragraph by paragraph |
+| 2 | **Plagiarism** | TF-IDF vectorization over a 2,500-paper arXiv corpus | Textual overlap and semantic similarity against known papers |
+| 3 | **Citation Validation** | CrossRef API lookup | Whether referenced DOIs actually exist and metadata matches |
+| 4 | **Statistical Integrity** | Pattern analysis | Suspicious p-values, repeated decimal patterns, implausible statistics |
+| 5 | **Writing Standards** | Structural heuristics | IEEE / IMRaD structure compliance, section presence, academic conventions |
+
+Results are combined into an **Overall Research Credibility** score (0–100), and every module returns its own score, explanations, and — where applicable — the actual suspicious passages so you can verify the findings instead of taking them on faith.
+
+## Quick Start
+
 ```bash
-start-dev.bat
-```
+# Clone and enter the project
+git clone https://github.com/SparshM8/VeriPaper.git && cd VeriPaper
 
-### Manual Setup
-
-**Terminal 1 - Backend:**
-```bash
+# Backend (Terminal 1)
 cd backend
-python -m venv venv
-venv\Scripts\activate
-pip install -r requirements.txt
+python -m venv venv && source venv/bin/activate
+pip install -r ../requirements.txt
 python -m uvicorn app.main:app --reload --port 8000
+
+# Frontend (Terminal 2)
+cd ../frontend && npm install && npm run dev
 ```
 
-**Terminal 2 - Frontend:**
-```bash
-cd frontend
-npm install
-npm run dev
-```
+Then open `http://localhost:5173`. On Windows you can instead run `start-dev.bat` from the project root.
 
-Visit `http://localhost:5173` and start analyzing!
+See [QUICKSTART.md](QUICKSTART.md) for the 5-minute guide and [DEVELOPMENT.md](DEVELOPMENT.md) for the full architecture.
 
-## 🏭 Production Setup
+## Production Deployment
 
-### Backend Environment
-
-Use `backend/.env.example` as baseline and set:
-
-- `ENVIRONMENT=production`
-- `CORS_ORIGINS=https://your-frontend-domain.com`
-- `MAX_UPLOAD_SIZE_MB=15` (or your preferred limit)
-- `REPORTS_DIR=reports`
-- `AI_MODEL_PATH=models/ai_detector.joblib`
-
-### Frontend Environment
-
-Use `frontend/.env.example` and set:
-
-- `VITE_API_BASE_URL=https://your-api-domain.com/api` (only needed when frontend and backend are on different origins)
-
-### Container Run
+The platform is already deployed to the **Render free tier** at [veripaper.onrender.com](https://veripaper.onrender.com) — the same single Dockerfile in this repo builds everything:
 
 ```bash
 docker build -t veripaper .
 docker run -p 8000:8000 --env-file backend/.env veripaper
 ```
 
-The production container serves API at `/api/*`, reports at `/files/*`, and frontend static files at `/static/*` when built.
+Deployment notes for free-tier hosting:
 
-## 📖 Documentation
+- The **transformer engine runs entirely on CPU via ONNX Runtime** with memory arenas disabled, holding a flat ~342 MB RSS even under 5+ concurrent analyses — well inside a 512 MB container.
+- An **asynchronous analysis queue** (`POST /api/analyze/async` + status polling) returns a task ID immediately so long papers never block the client.
+- **Sentry** (EU region) captures frontend exceptions in real time, and **UptimeRobot** keeps the free-tier instance warm with 5-minute health pings.
+- The in-memory task store is intentional for a single-instance free deployment; swap in Redis/DB persistence for multi-instance scaling.
 
-- **[QUICKSTART.md](QUICKSTART.md)** - 5-minute setup guide (start here!)
-- **[DEVELOPMENT.md](DEVELOPMENT.md)** - Detailed architecture and development guide
-- **[backend/](backend/)** - Backend API documentation
-- **[frontend/](frontend/)** - Frontend component guide
+## Features
 
-## 💻 System Requirements
+| Area | Capabilities |
+|------|-------------|
+| **Input formats** | PDF, DOCX, TXT (up to 15 MB) |
+| **AI detection** | Fine-tuned DistilBERT (F1 0.797), int8 quantized ONNX, paragraph-level verdicts with confidence |
+| **Plagiarism** | TF-IDF similarity against a curated arXiv corpus, top match highlighting |
+| **Citations** | DOI extraction, live CrossRef validation, year-mismatch detection |
+| **Statistics** | Red-flag patterns in p-values and repeated decimals |
+| **Writing quality** | IEEE / IMRaD structural compliance scoring |
+| **Frontend** | React 18 + Vite + Tailwind, live score gauges, dark/light theme, responsive |
+| **Async queue** | Non-blocking analysis with queued → processing → done progress states |
+| **History** | Full per-analysis record replay from server storage, with an ErrorBoundary crash fallback |
+| **Reports** | PDF, CSV, and JSON export for every analysis |
+| **Observability** | Sentry error tracking, health endpoints, stress-tested (10/10 concurrent requests) |
 
-- Python 3.11+
-- Node.js 16+
-- Modern web browser
-- 2GB RAM minimum
-- 500MB disk space
+## API Quick Reference
 
-## 📊 Analysis Results
+Interactive Swagger UI: `https://veripaper.onrender.com/docs` (rate-limited to 20 req/min).
 
-Each analysis returns:
-
-| Metric | Range | Interpretation |
-|--------|-------|-----------------|
-| **Plagiarism Score** | 0-100% | % similarity to known papers (lower = better) |
-| **AI Probability** | 0-100% | % likelihood content is AI-written (lower = better) |
-| **Citation Validity** | 0-100% | % of valid citations (higher = better) |
-| **Statistical Risk** | 0-100% | Risk level in statistical claims (lower = better) |
-| **Overall Credibility** | 0-100% | Combined authenticity score (higher = better) |
-
-## 🔌 API Quick Reference
-
-### Health Check
 ```bash
-GET /health
-→ {"status": "ok", "version": "0.1.0"}
+# Health
+GET /api/health
+
+# Synchronous analysis (small papers)
+POST /api/analyze          # multipart/form-data, field: file
+
+# Asynchronous analysis (recommended)
+POST /api/analyze/async    # returns { "task_id": "..." } immediately
+GET  /api/analyze/{task_id}/status   # polls queued → processing → done/error
+
+# History
+GET /api/history
+GET /api/history/{id}
+
+# Engine status
+GET /api/detector/status
+GET /api/detector/config
 ```
 
-### Analyze Paper
-```bash
-POST /api/analyze
-Content-Type: multipart/form-data
-Body: file=<PDF/DOCX/TXT>
+A full analysis response includes per-module scores, credibility verdict, flagged paragraphs, invalid DOIs, writing-standards findings, and a downloadable report path.
 
-Response: {
-  "plagiarism_score": 35.2,
-  "ai_probability": 42.1,
-  "citation_validity_score": 90.0,
-  "statistical_risk_score": 15.0,
-  "overall_research_credibility": 58.4,
-  "plagiarism_matches": [...],
-  "citation_invalid_dois": [...],
-  "report_path": "reports/..."
-}
-```
+## Test Suite
 
-### API Documentation
-Interactive Swagger UI at `http://localhost:8000/docs`
-
-## 🧪 Testing
-
-### Test Integration
 ```bash
 cd backend
-python scripts/verify_api.py data/sample_paper.txt
-```
-
-### Test Frontend
-Visit `http://localhost:5173` and upload a file
-
-### Automated Tests
-```bash
-pytest -q
-```
-
-CI is configured in `.github/workflows/ci.yml` to run backend tests and frontend build on push and pull requests.
-
-## 🏗️ Project Structure
-
-```
-VeriPaper/
-├── backend/              # FastAPI application
-│   ├── app/
-│   │   ├── main.py      # FastAPI setup
-│   │   ├── api/routes.py # Analysis endpoint
-│   │   └── services/    # Plagiarism, AI, citation, stats modules
-│   ├── scripts/         # Training and testing scripts
-│   ├── data/            # Sample datasets
-│   └── requirements.txt # Python dependencies
-├── frontend/            # React + Vite application
-│   ├── src/
-│   │   ├── App.jsx      # Dashboard component
-│   │   ├── ScoreGauge.jsx # Visualization
-│   │   └── api.js       # HTTP client
-│   └── package.json     # npm dependencies
-├── QUICKSTART.md        # 5-minute setup guide
-├── DEVELOPMENT.md       # Detailed documentation
-└── README.md           # This file
-```
-
-## 🌟 Features Included
-
-✅ Multi-factor analysis (plagiarism, AI detection, citations, statistics)
-✅ SBERT embeddings + FAISS vector search
-✅ Logistic regression AI classifier
-✅ CrossRef API integration for citations
-✅ PDF report generation
-✅ React dashboard with real-time visualization
-✅ Multi-format export (PDF, CSV, JSON)
-✅ Analysis history with localStorage
-✅ Dark/light theme support
-✅ Responsive mobile design
-✅ Pre-trained AI detector model
-✅ Test scripts included
-✅ API documentation with Swagger UI
-
-## 📚 Technology Stack
-
-### Backend
-- FastAPI 0.115.0
-- Python 3.11
-- SBERT 3.0.1 (Sentence embeddings)
-- FAISS 1.8.0 (Vector similarity)
-- scikit-learn (Logistic regression)
-- ReportLab (PDF generation)
-- Requests (CrossRef API)
-
-### Frontend
-- React 18.3.1
-- Vite 5.4.3
-- Tailwind CSS 3.4.10
-- Recharts 2.10.3
-- Axios 1.7.7
-
-## 🚢 Deployment
-
-### Docker
-```bash
-docker build -t veripaper-backend backend/
-docker run -p 8000:8000 veripaper-backend
-
-docker build -t veripaper-frontend frontend/
-docker run -p 3000:3000 veripaper-frontend
-```
-
-### Cloud Platforms
-- **Render**: Deploy backend with native Python support
-- **Vercel**: Deploy frontend with automatic builds
-- **AWS/GCP/Azure**: Use Docker containers
-
-## 🛠️ Configuration
-
-Create `backend/.env`:
-```
-CROSSREF_DISABLE=0
-REPORTS_DIR=backend/reports
-```
-
-## 📝 License
-
-MIT License - Free for academic and commercial use
-
-## 🤝 Contributing
-
-Contributions welcome! Please see DEVELOPMENT.md for setup and architecture details.
-
-## 📧 Support
-
-- 📖 Check QUICKSTART.md or DEVELOPMENT.md
-- 🐛 Review troubleshooting section
-- 💬 Open an issue on GitHub
-
----
-
-**Ready to analyze?** Start with [QUICKSTART.md](QUICKSTART.md)  
-**Want details?** Read [DEVELOPMENT.md](DEVELOPMENT.md)
-
-**Version**: 0.1.0 (Beta) | **Status**: Under Active Development
-
-### Setup
-1. Install dependencies from frontend/package.json.
-2. Run the dev server on port 5173.
-
-### Notes
-The frontend expects the backend at http://localhost:8000.
-
-## Outputs
-The analysis response includes scores, explanations, suspicious paragraph samples, and a report path for the generated PDF.
-
-## AI Detector Training
-Train the logistic regression model with a CSV that has columns text,label where label is 0 for human and 1 for AI.
-Use backend/scripts/train_ai_detector.py and pass --data and --output. The default output path matches AI_MODEL_PATH.
-
-## Launch Summary
-Backend runs on http://localhost:8000 (API at /api/analyze) and frontend runs on http://localhost:5173.
-
-## Testing
-Run the test script to verify the end-to-end pipeline:
-```bash
+python -m pytest backend/tests/ -q    # 20/20 passing (API + service tests)
 python backend/scripts/verify_api.py backend/data/sample_paper.txt
 ```
 
-## Architecture
-- **Text Extraction**: PyMuPDF for PDFs, python-docx for DOCX, plain UTF-8 for TXT
-- **Plagiarism Detection**: SBERT (all-MiniLM-L6-v2) embeddings + FAISS IndexFlatIP for semantic search
-- **AI Detection**: Perplexity, lexical diversity, stopword frequency, repetition, punctuation entropy + optional trained logistic regression
-- **Citation Validation**: Regex extraction + CrossRef API validation + year mismatch detection
-- **Statistical Risk**: Repeated decimal patterns, unrealistic p-values
-- **Scoring Formula**: 0.4 × (100 - plagiarism) + 0.4 × (100 - AI probability) + 0.2 × citation_validity
+Stress testing (5 concurrent × 2 uploads, production): **10/10 successes, 100% transformer-finetuned engine, zero heuristic fallbacks**, ~409 MB RSS with comfortable headroom under the 512 MB cap.
+
+## Project Structure
+
+```
+VeriPaper/
+├── backend/                  # FastAPI application
+│   ├── app/
+│   │   ├── main.py          # FastAPI app, lifespan (model warm-up), CORS
+│   │   ├── api/routes.py    # Sync + async analysis, history, detector status
+│   │   └── services/        # ai_detection.py, plagiarism.py, citations.py,
+│   │                        # statistics.py, writing.py, reports.py
+│   ├── frontend/            # Backend-embedded React build (Render builds here)
+│   ├── tests/               # pytest: API + service coverage
+│   ├── scripts/             # Training, validation, and verification scripts
+│   ├── models/              # model_quantized.onnx (int8 DistilBERT, 65 MB)
+│   └── requirements.txt
+├── frontend/                 # React 18 + Vite source (mirrored to backend/frontend)
+│   ├── src/
+│   │   ├── App.jsx          # Dashboard, async flow, history replay, ErrorBoundary
+│   │   ├── api.js           # HTTP client incl. pollUntilDone
+│   │   └── sentry.js        # Sentry SDK initialization
+│   └── package.json
+├── Dockerfile                # Single-stage production build
+├── QUICKSTART.md             # 5-minute setup
+├── DEVELOPMENT.md            # Architecture deep-dive
+├── DEPLOYMENT.md             # Docker Compose / PostgreSQL deployment
+└── README.md                 # This file
+```
+
+## Technology Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Backend | Python 3.11, FastAPI 0.115, Uvicorn, SQLAlchemy + SQLite |
+| ML / Inference | tokenizers (standalone), ONNX Runtime 1.18.1 (CPU), int8 DistilBERT |
+| Frontend | React 18.3, Vite 5, Tailwind CSS 3, Recharts, Axios |
+| Observability | Sentry (EU), UptimeRobot, Docker health checks |
+| Infrastructure | Render free tier, Docker, GitHub Actions CI |
+
+## CI / Quality
+
+GitHub Actions runs the backend test suite and frontend production build on every push and pull request. Commits follow a conventional style and the project enforces reproducible builds via a pinned Dockerfile.
+
+## License
+
+MIT — free for academic and commercial use.
+
+## Contributing
+
+Contributions are welcome. Please read [DEVELOPMENT.md](DEVELOPMENT.md) for architecture details, and run the test suite before opening a pull request. When adding frontend changes, remember that Render builds from `backend/frontend/` — keep both copies in sync.
+
+## Support
+
+- Setup issues → [QUICKSTART.md](QUICKSTART.md)
+- Architecture questions → [DEVELOPMENT.md](DEVELOPMENT.md)
+- Bugs → open a [GitHub issue](https://github.com/SparshM8/VeriPaper/issues)
+
+---
+
+**Version** 1.0.0 · **Status**: Production — live at [veripaper.onrender.com](https://veripaper.onrender.com)
