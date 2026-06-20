@@ -59,4 +59,6 @@ reports/*.pdf
 
 # Temporary files
 *.tmp
-*.bak
+*.bak# Generated reports
+backend/reports/
+backend/veripaper.sqlite
