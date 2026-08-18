@@ -21,4 +21,6 @@ def load_engines():
             str(settings.ROOT_DIR / "models" / "ai_detector_transformer")
         )
     plagiarism.load_corpus()
+    plagiarism.ensure_index()
+    ai_detection._load_on_demand()
     yield

@@ -31,11 +31,11 @@ async def lifespan(_: FastAPI):
     from .services import plagiarism as plagiarism_svc
 
     if ai_detection.load_trained_model(settings.MODEL_PATH):
-        logger.info("✅ Trained AI detector loaded: %s", ai_detection.get_detector_meta()["model_version"])
+        logger.info("✅ Trained AI detector registered (loaded on first analysis request)")
     else:
         logger.warning("No trained AI model available; heuristic engine will be used")
     if plagiarism_svc.load_corpus():
-        logger.info("✅ Plagiarism similarity corpus loaded")
+        logger.info("✅ Plagiarism similarity corpus registered (index built on first analysis request)")
     else:
         logger.warning("Similarity corpus not found; internal duplication check only")
 

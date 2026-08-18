@@ -107,6 +107,8 @@ def heuristic_ai_score(text: str) -> float:
 # --- Trained model tier -------------------------------------------------------
 
 _model = None
+_model_path: Optional[str] = None  # registered at boot; loaded lazily on first call
+_model_loaded_attempted: bool = False
 _model_meta = {
     "version": "unknown",
     "metrics": {"f1": None, "precision": None, "recall": None, "auc": None},
@@ -129,15 +131,31 @@ def _pick_engine(model_path):
 
 
 def load_trained_model(model_path) -> bool:
-    """Load the best available trained detector (LR or transformer) per benchmark.
+    """Register the model location; the actual weights are loaded lazily on the
+    first detection call to keep boot memory low (e.g. 512 MB free-tier hosts).
 
-    The benchmark script (scripts/train_ai_detector_v2.py) writes
+    The benchmark script (scripts/train_ai_detector_v3.py) writes
     models/ai_detector_winner.json; the transformer path is preferred because
     it scored higher on the validation split.
     """
     from pathlib import Path
-
+    global _model_path, _model_loaded_attempted
     path = Path(model_path)
+    _model_path = str(path)
+    _model_loaded_attempted = False
+    if not path.exists() and not (path.parent / "ai_detector_transformer").exists():
+        return False
+    return True
+
+
+def _load_on_demand() -> None:
+    """Load the best available trained detector on first use."""
+    global _model_loaded_attempted
+    if _model_path is None or _model_loaded_attempted:
+        return
+    _model_loaded_attempted = True
+    from pathlib import Path
+    path = Path(_model_path)
     engine, meta = _pick_engine(path)
     tf_path = path.parent / "ai_detector_transformer"
     if engine == "transformer" and tf_path.exists():
@@ -166,6 +184,7 @@ def load_trained_model(model_path) -> bool:
 
 def trained_ai_score(text: str) -> Optional[float]:
     """Run the trained logistic regression detector (0-1), or None if unavailable."""
+    _load_on_demand()
     if _model is None:
         return None
     try:
@@ -221,6 +240,7 @@ def _resolve_label_map(model_path: str) -> int:
 
 def transformer_ai_score(text: str) -> Optional[float]:
     """Run the transformer detector (0-1), or None if unavailable."""
+    _load_on_demand()
     if _transformer is None:
         return None
     try:
@@ -251,6 +271,8 @@ AI_LOW = 0.38
 
 
 def detect_ai(text: str, use_trained: bool = True) -> AIDetectionResult:
+    if use_trained:
+        _load_on_demand()
     score = None
     engine = "heuristic"
 

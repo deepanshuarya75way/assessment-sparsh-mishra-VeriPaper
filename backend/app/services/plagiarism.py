@@ -43,6 +43,9 @@ _embeddings = None     # np.ndarray
 _titles = None         # np.ndarray of titles
 _corpus_labels = None  # np.ndarray of corpus labels
 _embedder = None       # sentence-transformers model
+_corpus_path: Optional[str] = None  # resolves corpus lazily to save boot memory
+_corpus_loaded: bool = False
+_corpus_failed: bool = False
 
 _corpuses: Dict[str, str] = {
     "arxiv": "arXiv open abstract corpus",
@@ -71,11 +74,22 @@ def _embed_batch(texts: List[str]) -> np.ndarray:
 
 
 def load_corpus(corpus_path: Optional[str] = None) -> bool:
-    """Load (or reload) the similarity corpus from a JSONL file.
+    """Register (or reload) the similarity corpus path.
+
+    On memory-constrained hosts (e.g. free-tier Render with 512 MB), the
+    embedding model and FAISS index are built lazily on the first analysis
+    request instead of at boot.
 
     JSONL format: {"title": "...", "text": "...", "corpus": "arxiv"}
     """
-    global _index, _embeddings, _titles, _corpus_labels
+    global _index, _embeddings, _titles, _corpus_labels, _corpus_path
+    global _corpus_loaded, _corpus_failed
+    _index = None
+    _embeddings = None
+    _titles = None
+    _corpus_labels = None
+    _corpus_loaded = False
+    _corpus_failed = False
     if corpus_path is None:
         corpus_path = os.environ.get(
             "VERIPAPER_CORPUS_PATH",
@@ -84,6 +98,50 @@ def load_corpus(corpus_path: Optional[str] = None) -> bool:
     path = Path(corpus_path)
     if not path.exists():
         logger.warning("Corpus file not found: %s", path)
+        return False
+    _corpus_path = str(path)
+    _corpus_loaded = True
+    return True
+
+
+def ensure_index() -> bool:
+    """Lazily build the FAISS index on first use (saves boot memory)."""
+    global _corpus_loaded, _corpus_failed
+    if _index is not None:
+        return True
+    if _corpus_failed or not _corpus_loaded or not _corpus_path:
+        return False
+    _corpus_failed = True  # avoid re-raise loops; reset if a fresh load_corpus is called
+    return _build_index(_corpus_path)
+
+
+def _build_index_from_texts(titles, labels, texts, path: Path) -> bool:
+    """Build the embedding matrix and FAISS index from parsed corpus texts."""
+    global _index, _embeddings, _corpus_path, _corpus_failed
+    logger.info("Building FAISS index over %d corpus entries...", len(texts))
+    try:
+        _embeddings = _embed_batch(texts)
+    except Exception as exc:
+        logger.error("Corpus embedding failed: %s", exc)
+        _corpus_failed = True
+        return False
+    dimension = _embeddings.shape[1]
+    import faiss
+
+    _index = faiss.IndexFlatIP(dimension)
+    _index.add(_embeddings)
+    logger.info("FAISS index ready (%s)", _index.ntotal)
+    return True
+
+
+def _build_index(path_str: str) -> bool:
+    """Parse the registered corpus JSONL and build the index lazily."""
+    global _corpus_failed, _corpus_loaded
+    path = Path(path_str)
+    if not path.exists():
+        logger.warning("Corpus file not found: %s", path)
+        _corpus_failed = True
+        _corpus_loaded = False
         return False
 
     titles, texts, labels = [], [], []
@@ -109,19 +167,12 @@ def load_corpus(corpus_path: Optional[str] = None) -> bool:
 
     if not texts:
         logger.warning("Corpus empty after parsing")
+        _corpus_failed = True
+        _corpus_loaded = False
         return False
-
-    logger.info("Building FAISS index over %d corpus entries...", len(texts))
-    _titles = np.array(titles)
-    _corpus_labels = np.array(labels)
-    _embeddings = _embed_batch(texts)
-    dimension = _embeddings.shape[1]
-    import faiss
-
-    _index = faiss.IndexFlatIP(dimension)
-    _index.add(_embeddings)
-    logger.info("FAISS index ready (%s)", _index.ntotal)
-    return True
+    ok = _build_index_from_texts(titles, labels, texts, path)
+    _corpus_failed = not ok
+    return ok
 
 
 def _chunk_section_text(text: str) -> List[str]:
@@ -143,6 +194,7 @@ def _chunk_section_text(text: str) -> List[str]:
 
 
 def _search_chunk(chunk: str) -> Optional[SimilarityMatch]:
+    ensure_index()
     if _index is None:
         return None
     query = _embed_batch([chunk])
