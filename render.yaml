@@ -2,7 +2,7 @@ services:
   - type: web
     name: veripaper-api
     runtime: docker
-    dockerContext: ./backend
+    dockerContext: .
     dockerfilePath: ./backend/Dockerfile
     autoDeploy: true
     plan: free

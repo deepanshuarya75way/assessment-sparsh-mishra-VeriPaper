@@ -3,7 +3,7 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Install system build dependencies for scientific packages
+# Install system build dependencies for scientific packages and the frontend build
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
     build-essential \
@@ -13,27 +13,33 @@ RUN apt-get update \
     liblapacke-dev \
     pkg-config \
     curl \
+    ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+ && apt-get install -y --no-install-recommends nodejs \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Copy requirements and install Python dependencies
-COPY requirements.txt pyproject.toml ./
+COPY backend/requirements.txt pyproject.toml ./
 
 RUN python -m pip install --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r requirements.txt
 
 # Pre-baked model artifacts (transformer detector + LR fallback)
-COPY models/ models/
+COPY backend/models/ models/
 
-# Corpus data (arXiv abstracts used by the similarity search) and samples
-COPY data/ data/
+# Corpus data (arXiv abstracts used by the similarity search)
+COPY backend/data/ data/
 
-# Application code
-COPY app/ app/
+# Frontend source + build it once (snapshot for the /static mount)
+COPY frontend/ frontend/
+RUN cd frontend && npm ci --ignore-scripts && npm run build \
+ && rm -rf node_modules package-lock.json
 
-# Pre-built frontend (mounted under /static by the API)
-COPY frontend/dist/ frontend/dist/
+# Application code (kept last so code edits don't bust the pip/model cache)
+COPY backend/app/ app/
 
 RUN mkdir -p /app/reports
 

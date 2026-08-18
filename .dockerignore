@@ -16,3 +16,7 @@ reports/
 *.log
 .venv/
 .env
+backend/tests/
+backend/scripts/
+backend/reports/
+scripts/
