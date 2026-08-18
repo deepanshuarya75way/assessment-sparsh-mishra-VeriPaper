@@ -1,54 +1,36 @@
-FROM python:3.11-slim
-
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-
-# Install system build dependencies for scientific packages and the frontend build
-RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-    build-essential \
-    gfortran \
-    libopenblas-dev \
-    liblapack-dev \
-    liblapacke-dev \
-    pkg-config \
-    curl \
-    ca-certificates \
- && rm -rf /var/lib/apt/lists/* \
- && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
- && apt-get install -y --no-install-recommends nodejs \
- && rm -rf /var/lib/apt/lists/*
+# Frontend build stage
+FROM node:18-alpine AS builder
 
 WORKDIR /app
 
-# Copy requirements and install Python dependencies
-COPY backend/requirements.txt pyproject.toml ./
+ARG VITE_API_BASE_URL=http://localhost:8000/api
+ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 
-RUN python -m pip install --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir -r requirements.txt
+# Copy package files first
+COPY package.json package-lock.json ./
 
-# Pre-baked model artifacts (transformer detector + LR fallback)
-COPY backend/models/ models/
+# Install dependencies
+RUN npm install
 
-# Corpus data (arXiv abstracts used by the similarity search)
-COPY backend/data/ data/
+# Copy source code
+COPY . .
 
-# Frontend source + build it once (snapshot for the /static mount)
-COPY frontend/ frontend/
-RUN cd frontend && npm ci --ignore-scripts && npm run build \
- && rm -rf node_modules package-lock.json
+# Build for production - run vite directly with node
+RUN node node_modules/vite/bin/vite.js build
 
-# Application code (kept last so code edits don't bust the pip/model cache)
-COPY backend/app/ app/
+# Production stage - serve with lightweight HTTP server
+FROM node:18-alpine
 
-RUN mkdir -p /app/reports
+WORKDIR /app
 
-# Expose API port
-EXPOSE 8000
+# Install serve to run the built app
+RUN npm install -g serve
 
-# Health check — Render free tier requires a passing check within ~90s
-HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+# Copy built app from builder
+COPY --from=builder /app/dist ./dist
 
-# Start uvicorn server
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Expose port
+EXPOSE 3000
+
+# Start the application
+CMD ["serve", "-s", "dist", "-l", "3000"]

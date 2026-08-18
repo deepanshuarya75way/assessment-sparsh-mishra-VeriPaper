@@ -101,7 +101,7 @@ def readiness_check() -> dict:
     checks = {
         "reports_dir_exists": reports_dir.exists(),
         "model_available": settings.MODEL_PATH.exists(),
-        "similarity_corpus": plagiarism_mod._index is not None,
+        "similarity_corpus": plagiarism_mod._corpus_loaded,
         "trained_ai_model": ai_detection_mod._model is not None or ai_detection_mod._transformer is not None,
     }
     required = checks["reports_dir_exists"]
