@@ -1,24 +1,30 @@
-"""Semantic plagiarism detection service.
+"""Term-overlap plagiarism detection service.
 
-Uses SBERT embeddings + FAISS similarity search against a bundled corpus of
+Uses TF-IDF sparse-vector cosine similarity against a bundled corpus of
 open academic abstracts, plus an internal duplicate-paragraph detector for
 self-plagiarism. Returns per-section similarity evidence.
+
+Why TF-IDF instead of neural embeddings: the free-tier host has 512 MB of RAM.
+A sentence-transformer model plus the corpus embedding matrix exceeds that
+budget during analysis and crashes the process. Sparse TF-IDF vectors cost a
+few megabytes total, are deterministic, require no GPU, and give stable,
+honest term-overlap matching — documented as such on the methodology page.
 """
 import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
 MIN_PAPER_WORDS = 60          # below this, plagiarism signals are unreliable
-CHUNK_MIN_WORDS = 35          # sentence-group chunk size for embedding search
-FAISS_SEARCH_TOP_K = 5
-FAISS_SIMILARITY_THRESHOLD = 0.75  # cosine similarity above this = a candidate match
-FAISS_MATCH_THRESHOLD = 0.82      # only reported as a confident match above this
+CHUNK_MIN_WORDS = 35          # sentence-group chunk size for corpus search
+SEARCH_TOP_K = 5
+SIMILARITY_THRESHOLD = 0.45   # cosine similarity above this = a candidate match
+MATCH_THRESHOLD = 0.60        # only reported as a confident match above this
 
 
 @dataclass
@@ -38,11 +44,10 @@ class PlagiarismResult:
     embeddable_sections: int = 0
 
 
-_index = None          # faiss IndexFlatIP
-_embeddings = None     # np.ndarray
+_vectorizer = None     # fitted TfidfVectorizer (sparse corpus matrix)
+_corpus_matrix = None  # scipy sparse csr
 _titles = None         # np.ndarray of titles
 _corpus_labels = None  # np.ndarray of corpus labels
-_embedder = None       # sentence-transformers model
 _corpus_path: Optional[str] = None  # resolves corpus lazily to save boot memory
 _corpus_loaded: bool = False
 _corpus_failed: bool = False
@@ -53,39 +58,45 @@ _corpuses: Dict[str, str] = {
 }
 
 
-def _load_embedder(model_name: str = "all-MiniLM-L6-v2"):
-    """Lazily load the SBERT embedder (~90 MB)."""
-    global _embedder
-    if _embedder is None:
+def _load_vectorizer():
+    """Lazily build the TF-IDF vectorizer (~2 MB)."""
+    global _vectorizer
+    if _vectorizer is None:
         try:
-            from sentence_transformers import SentenceTransformer
+            from sklearn.feature_extraction.text import TfidfVectorizer
 
-            _embedder = SentenceTransformer(model_name)
-            logger.info("SBERT embedder loaded")
+            _vectorizer = TfidfVectorizer(
+                max_features=20000,
+                min_df=2,
+                max_df=0.95,
+                sublinear_tf=True,
+                stop_words="english",
+                ngram_range=(1, 2),
+            )
         except Exception as exc:  # pragma: no cover
-            logger.error("SBERT load failed: %s", exc)
+            logger.error("TF-IDF vectorizer init failed: %s", exc)
             raise
 
 
-def _embed_batch(texts: List[str]) -> np.ndarray:
-    _load_embedder()
-    vectors = _embedder.encode(texts, batch_size=16, show_progress_bar=False, normalize_embeddings=True)
-    return np.asarray(vectors, dtype=np.float32)
+def _transform(texts: List[str]):
+    _load_vectorizer()
+    if not getattr(_vectorizer, "vocabulary_", {}):
+        raise RuntimeError("TF-IDF corpus matrix not fitted yet")
+    return _vectorizer.transform(texts)
 
 
 def load_corpus(corpus_path: Optional[str] = None) -> bool:
     """Register (or reload) the similarity corpus path.
 
-    On memory-constrained hosts (e.g. free-tier Render with 512 MB), the
-    embedding model and FAISS index are built lazily on the first analysis
-    request instead of at boot.
+    The TF-IDF matrix is built lazily on the first analysis request to keep
+    boot memory minimal (important on 512 MB free-tier hosts).
 
     JSONL format: {"title": "...", "text": "...", "corpus": "arxiv"}
     """
-    global _index, _embeddings, _titles, _corpus_labels, _corpus_path
+    global _vectorizer, _corpus_matrix, _titles, _corpus_labels, _corpus_path
     global _corpus_loaded, _corpus_failed
-    _index = None
-    _embeddings = None
+    _vectorizer = None
+    _corpus_matrix = None
     _titles = None
     _corpus_labels = None
     _corpus_loaded = False
@@ -105,9 +116,9 @@ def load_corpus(corpus_path: Optional[str] = None) -> bool:
 
 
 def ensure_index() -> bool:
-    """Lazily build the FAISS index on first use (saves boot memory)."""
+    """Lazily fit the TF-IDF matrix on first use (saves boot memory)."""
     global _corpus_loaded, _corpus_failed
-    if _index is not None:
+    if _corpus_matrix is not None:
         return True
     if _corpus_failed or not _corpus_loaded or not _corpus_path:
         return False
@@ -116,27 +127,24 @@ def ensure_index() -> bool:
 
 
 def _build_index_from_texts(titles, labels, texts, path: Path) -> bool:
-    """Build the embedding matrix and FAISS index from parsed corpus texts."""
-    global _index, _embeddings, _corpus_path, _corpus_failed
-    logger.info("Building FAISS index over %d corpus entries...", len(texts))
+    """Fit the TF-IDF matrix over the corpus texts."""
+    global _corpus_matrix, _corpus_failed, _titles, _corpus_labels
+    logger.info("Fitting TF-IDF index over %d corpus entries...", len(texts))
     try:
-        _embeddings = _embed_batch(texts)
+        _load_vectorizer()
+        _corpus_matrix = _vectorizer.fit_transform(texts)
+        _vectorizer_fixed = True  # noqa: F841 (vectorizer now fitted)
     except Exception as exc:
-        logger.error("Corpus embedding failed: %s", exc)
+        logger.error("Corpus TF-IDF fit failed: %s", exc)
         _corpus_failed = True
         return False
-    dimension = _embeddings.shape[1]
-    import faiss
-
-    _index = faiss.IndexFlatIP(dimension)
-    _index.add(_embeddings)
-    logger.info("FAISS index ready (%s)", _index.ntotal)
+    logger.info("TF-IDF index ready (%d docs)", _corpus_matrix.shape[0])
     return True
 
 
 def _build_index(path_str: str) -> bool:
     """Parse the registered corpus JSONL and build the index lazily."""
-    global _corpus_failed, _corpus_loaded
+    global _corpus_failed, _corpus_loaded, _titles, _corpus_labels
     path = Path(path_str)
     if not path.exists():
         logger.warning("Corpus file not found: %s", path)
@@ -170,9 +178,17 @@ def _build_index(path_str: str) -> bool:
         _corpus_failed = True
         _corpus_loaded = False
         return False
-    ok = _build_index_from_texts(titles, labels, texts, path)
-    _corpus_failed = not ok
-    return ok
+
+    try:
+        _titles = np.array(titles)
+        _corpus_labels = np.array(labels)
+        ok = _build_index_from_texts(titles, labels, texts, path)
+        _corpus_failed = not ok
+        return ok
+    except Exception as exc:
+        logger.error("Corpus index build failed: %s", exc)
+        _corpus_failed = True
+        return False
 
 
 def _chunk_section_text(text: str) -> List[str]:
@@ -195,13 +211,23 @@ def _chunk_section_text(text: str) -> List[str]:
 
 def _search_chunk(chunk: str) -> Optional[SimilarityMatch]:
     ensure_index()
-    if _index is None:
+    if _corpus_matrix is None:
         return None
-    query = _embed_batch([chunk])
-    scores, indices = _index.search(query, FAISS_SEARCH_TOP_K)
-    best_sim = float(scores[0][0])
-    best_idx = int(indices[0][0])
-    if best_sim >= FAISS_MATCH_THRESHOLD and best_idx >= 0:
+    query = _transform([chunk])
+    # Cosine similarity via sparse dot product (matrices are TF-IDF-normalized)
+    scores = query * _corpus_matrix.T
+    if scores.nnz == 0:
+        return None
+    # top-k indices from the sparse row
+    row = scores.getrow(0)
+    col_idx = row.indices
+    if len(col_idx) == 0:
+        return None
+    top_local = np.argsort(row.data)[-SEARCH_TOP_K:][::-1]
+    best_local = top_local[0]
+    best_idx = int(col_idx[best_local])
+    best_sim = float(row.data[best_local])
+    if best_sim >= MATCH_THRESHOLD and best_idx >= 0:
         return SimilarityMatch(
             source_title=str(_titles[best_idx]),
             source_corpus=_corpuses.get(str(_corpus_labels[best_idx]), str(_corpus_labels[best_idx])),
@@ -221,9 +247,9 @@ def _jaccard(a_tokens: set, b_tokens: set) -> float:
 def _detect_internal_duplication(sections: List["Section"]) -> List[SimilarityMatch]:
     """Find near-duplicate content across sections (self-plagiarism / copy-paste).
 
-    Uses near-exact token overlap (Jaccard >= 0.70) rather than embedding
-    similarity: academic papers are topically consistent, so embedding-based
-    checks between the paper's own sections over-flag normal writing.
+    Uses near-exact token overlap (Jaccard) rather than corpus similarity:
+    academic papers are topically consistent, so corpus-based checks between
+    the paper's own sections over-flag normal writing.
     """
     from .parsing import Section  # noqa: delayed import to avoid cycles
     matches: List[SimilarityMatch] = []
@@ -242,7 +268,7 @@ def _detect_internal_duplication(sections: List["Section"]) -> List[SimilarityMa
                 continue
             jacc = _jaccard(toks_i, toks_j)
             if jacc >= 0.85:
-                key = hash(text_i + text_i if False else text_i[:150])
+                key = hash(text_i[:150])
                 if key in reported:
                     continue
                 reported.add(key)

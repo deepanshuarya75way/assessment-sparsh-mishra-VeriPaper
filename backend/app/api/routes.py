@@ -203,7 +203,7 @@ async def analyze_paper(
         # --- Build the response payload ---
         sections_payload = json.loads(record.sections) if record.sections else []
         verified = json.loads(record.citation_details).get("verified", []) if record.citation_details else []
-        if plagiarism_svc._index is None:
+        if not plagiarism_svc._corpus_loaded:
             plag_summary = "Similarity corpus not loaded; only internal duplication checked."
         elif record.plagiarism_score <= 5:
             plag_summary = "No significant similarity to the indexed open corpus."
@@ -308,7 +308,7 @@ def get_history_item(record_id: int, db: Session = Depends(get_db)):
 def detector_config():
     """Honest detector configuration: which engine is loaded and its measured metrics."""
     meta = ai_detection.get_detector_meta()
-    corpus_loaded = plagiarism_svc._index is not None or plagiarism_svc._embedder is not None
+    corpus_loaded = plagiarism_svc._corpus_loaded
     return {
         "ai_detection": meta,
         "plagiarism_corpus_loaded": corpus_loaded,
@@ -329,7 +329,7 @@ def methodology():
                 "machine-generated text. Confidence is 'low' when signals are mixed."
             ),
             "plagiarism_similarity": (
-                "Semantic similarity search (sentence embeddings + FAISS) against a bundled "
+                "Term-overlap similarity search (TF-IDF cosine similarity) against a bundled "
                 "corpus of open academic abstracts, plus an internal duplication check. "
                 "It does NOT scan the whole internet."
             ),
