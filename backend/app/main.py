@@ -20,6 +20,11 @@ async def lifespan(_: FastAPI):
     try:
         from .core.database import init_db
 
+        # Ensure the database parent directory exists (e.g. /app/data on Render)
+        if settings.database_url.startswith("sqlite://"):
+            db_path = settings.database_url[len("sqlite://") :]
+            if db_path != ":memory:":
+                Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         init_db()
         logger.info("✅ Database initialized successfully")
     except Exception as e:
