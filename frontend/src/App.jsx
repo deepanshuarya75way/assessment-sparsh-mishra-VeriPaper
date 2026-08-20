@@ -246,7 +246,8 @@ function ProvenancePanel({ data }) {
           {data.retracted_dois.map((d, i) => (
             <div key={i} className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs">
               <p className="font-medium text-slate-900">{d.doi || "Unknown DOI"}</p>
-              {d.title && <p className="text-slate-600 mt-0.5">{d.title}</p>}
+              {d.retraction_date && <p className="text-slate-600 mt-0.5">Retracted {d.retraction_date}</p>}
+              {d.notice_type && <p className="text-slate-500 mt-0.5">Notice: {d.notice_type}</p>}
               {d.reason && <p className="text-red-700 mt-0.5">{d.reason}</p>}
             </div>
           ))}
@@ -255,13 +256,17 @@ function ProvenancePanel({ data }) {
       {(data.alignment_verdicts?.length || 0) > 0 && (
         <div className="space-y-2">
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Claim-by-claim alignment</p>
-          {data.alignment_verdicts.map((v, i) => (
-            <div key={i} className={`p-3 rounded-lg border text-xs ${v.aligned ? "bg-emerald-50 border-emerald-200" : "bg-amber-50 border-amber-200"}`}>
-              <p className="font-medium text-slate-900">{v.doi || "Referenced claim"} <span className={`ml-2 font-semibold ${v.aligned ? "text-emerald-700" : "text-amber-700"}`}>{v.aligned ? "✓ Aligned" : "⚠ Not aligned"}</span></p>
-              {v.matched_abstract && <p className="text-slate-600 mt-1">{v.matched_abstract}</p>}
-              {typeof v.similarity === "number" && <p className="text-slate-500 mt-1">Semantic similarity: {Math.round(v.similarity)}%</p>}
-            </div>
-          ))}
+          {data.alignment_verdicts.map((v, i) => {
+            const isAligned = v.alignment === "aligned";
+            const isWeak = v.alignment === "weak";
+            return (
+              <div key={i} className={`p-3 rounded-lg border text-xs ${isAligned ? "bg-emerald-50 border-emerald-200" : isWeak ? "bg-amber-50 border-amber-200" : "bg-red-50 border-red-200"}`}>
+                <p className="font-medium text-slate-900 break-all">{v.doi || "Referenced claim"} <span className={`ml-2 font-semibold ${isAligned ? "text-emerald-700" : "text-amber-700"}`}>{isAligned ? "✓ Aligned" : isWeak ? "⚠ Weak" : "✗ Unsupported"}</span></p>
+                {v.reason && <p className="text-slate-600 mt-1">{v.reason}</p>}
+                {typeof v.overlap === "number" && <p className="text-slate-500 mt-1">Lexical overlap with cited abstract: {Math.round(v.overlap * 100)}%</p>}
+              </div>
+            );
+          })}
         </div>
       )}
       {data.web_summary && (
@@ -387,18 +392,32 @@ function flatRecordToResult(record) {
       score: score(record.writing_quality_score),
       checks: [],
     },
-    provenance: {
-      score: score(record.provenance_score, 50),
-      summary: "Replay of a stored analysis — detailed provenance evidence is not kept after the original scan completes.",
-      fingerprint_score: score(record.methodology_fingerprint_score, 50),
-      alignment_score: score(record.claim_alignment_score, 50),
-      contamination_score: score(record.retraction_contamination_score, 0),
-      graph_anomaly_score: score(record.citation_graph_anomaly_score, 0),
-      web_available: false,
-      web_matches: [],
-      retracted_dois: [],
-      alignment_verdicts: [],
-    },
+    provenance: buildReplayProvenance(record),
+  };
+}
+
+function buildReplayProvenance(record) {
+  const score = (v, fallback) => (typeof v === "number" && Number.isFinite(v) ? v : fallback);
+  const details = record.provenance_details || {};
+  if (record.provenance_score == null && !details) return null;
+  return {
+    score: score(record.provenance_score, 50),
+    summary:
+      details.summary ||
+      "Replay of a stored analysis — detailed provenance evidence is not kept after the original scan completes.",
+    contamination_score: details.contamination_score ?? 50,
+    graph_anomaly_score: details.graph_anomaly_score ?? 50,
+    alignment_score: details.alignment_score ?? 50,
+    fingerprint_score: details.fingerprint_score ?? 50,
+    contamination_summary: details.contamination_summary || "",
+    retracted_dois: details.retracted_dois || [],
+    alignment_verdicts: details.alignment_verdicts || [],
+    fingerprint_notes: details.fingerprint_notes || {},
+    graph_density: details.graph_density || 0,
+    isolated_references: details.isolated_references || 0,
+    web_matches: details.web_matches || [],
+    web_summary: details.web_summary || "",
+    web_available: details.web_available === true,
   };
 }
 

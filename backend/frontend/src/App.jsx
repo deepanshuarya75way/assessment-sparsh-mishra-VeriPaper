@@ -392,18 +392,32 @@ function flatRecordToResult(record) {
       score: score(record.writing_quality_score),
       checks: [],
     },
-    provenance: {
-      score: score(record.provenance_score, 50),
-      summary: "Replay of a stored analysis — detailed provenance evidence is not kept after the original scan completes.",
-      fingerprint_score: score(record.methodology_fingerprint_score, 50),
-      alignment_score: score(record.claim_alignment_score, 50),
-      contamination_score: score(record.retraction_contamination_score, 0),
-      graph_anomaly_score: score(record.citation_graph_anomaly_score, 0),
-      web_available: false,
-      web_matches: [],
-      retracted_dois: [],
-      alignment_verdicts: [],
-    },
+    provenance: buildReplayProvenance(record),
+  };
+}
+
+function buildReplayProvenance(record) {
+  const score = (v, fallback) => (typeof v === "number" && Number.isFinite(v) ? v : fallback);
+  const details = record.provenance_details || {};
+  if (record.provenance_score == null && !details) return null;
+  return {
+    score: score(record.provenance_score, 50),
+    summary:
+      details.summary ||
+      "Replay of a stored analysis — detailed provenance evidence is not kept after the original scan completes.",
+    contamination_score: details.contamination_score ?? 50,
+    graph_anomaly_score: details.graph_anomaly_score ?? 50,
+    alignment_score: details.alignment_score ?? 50,
+    fingerprint_score: details.fingerprint_score ?? 50,
+    contamination_summary: details.contamination_summary || "",
+    retracted_dois: details.retracted_dois || [],
+    alignment_verdicts: details.alignment_verdicts || [],
+    fingerprint_notes: details.fingerprint_notes || {},
+    graph_density: details.graph_density || 0,
+    isolated_references: details.isolated_references || 0,
+    web_matches: details.web_matches || [],
+    web_summary: details.web_summary || "",
+    web_available: details.web_available === true,
   };
 }
 

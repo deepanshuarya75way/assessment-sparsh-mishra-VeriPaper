@@ -1,7 +1,7 @@
-"""
-Database models for storing analysis results and history.
+"""Database models for storing analysis results and history.
 Works with PostgreSQL and SQLite via SQLAlchemy ORM.
 """
+import json
 from datetime import datetime
 from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, JSON
 from sqlalchemy.orm import declarative_base
@@ -76,4 +76,6 @@ class AnalysisResult(Base):
             "verdict": self.verdict,
             "report_path": self.report_path,
             "analyzed_at": self.analyzed_at.isoformat() if self.analyzed_at else None,
+            "provenance_score": self.provenance_score,
+            "provenance_details": json.loads(self.pcv_details) if self.pcv_details else None,
         }
