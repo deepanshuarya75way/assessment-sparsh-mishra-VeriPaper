@@ -381,25 +381,46 @@ export default function App() {
       ].slice(0, 15));
       setOpenModule("ai_detection");
     } catch (err) {
-      const msg = err.response?.data?.detail || err.message || "Analysis failed. Please try again.";
-      setError(typeof msg === "string" ? msg : JSON.stringify(msg));
+      setError(friendlyError(err, "Analysis failed. Please try again."));
     } finally {
       timers.forEach(clearTimeout);
       setLoading(false);
     }
   };
 
+  /* Convert any API error payload into a human-readable string, so the
+     UI never shows a raw "[object Object]" from FastAPI validation lists. */
+  const friendlyError = (err, fallback) => {
+    const raw = err?.response?.data?.detail ?? err?.message ?? fallback;
+    if (typeof raw === "string") return raw;
+    if (Array.isArray(raw)) {
+      // FastAPI validation errors: [{loc, msg, type}, ...]
+      const first = raw[0];
+      if (first && typeof first.msg === "string") return first.msg;
+      return String(raw[0] ?? fallback);
+    }
+    if (raw && typeof raw.msg === "string") return raw.msg;
+    if (raw && typeof raw.detail === "string") return raw.detail;
+    return fallback;
+  };
+
   const openOld = async (entry) => {
     setError("");
     setReplayError("");
+    // Only server-side rows have numeric ids; local/browser copies and the
+    // ephemeral preview rows use string ids that the API cannot resolve.
+    const recordId = Number(entry.id);
+    if (!Number.isFinite(recordId)) {
+      setReplayError("This entry was saved in your browser only — re-upload the paper for a fresh verification.");
+      return;
+    }
     setReplayLoading(true);
     try {
-      const record = await fetchHistoryItem(entry.id);
+      const record = await fetchHistoryItem(recordId);
       setResult(flatRecordToResult(record));
       setOpenModule("ai_detection");
     } catch (err) {
-      const msg = err.response?.data?.detail || err.message || "Could not open this analysis.";
-      setReplayError(typeof msg === "string" ? msg : String(msg));
+      setReplayError(friendlyError(err, "Could not open this analysis. Re-upload the paper for a fresh verification."));
     } finally {
       setReplayLoading(false);
     }
