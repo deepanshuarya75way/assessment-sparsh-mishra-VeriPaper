@@ -46,6 +46,7 @@ const MODULE_TITLES = {
   citation: "Citation Authenticity",
   statistics: "Statistical Integrity",
   writing: "Writing & Standards",
+  provenance: "Provenance Chain Verification",
 };
 
 const MODULE_EXPLAIN = {
@@ -54,6 +55,7 @@ const MODULE_EXPLAIN = {
   citation: "Every DOI is checked live against the CrossRef registry. Missing or invalid DOIs reduce the score, because fabricated references are a common integrity red flag.",
   statistics: "Looks for unrealistic numeric patterns — suspiciously clean p-values, round percentages, and implausible results — that often appear in manipulated reporting.",
   writing: "Checks the paper against academic conventions: required sections, formal tone, consistent citation style, citation-text linkage, figure/table references, and heading hierarchy.",
+  provenance: "VeriPaper's flagship check: traces every claim to its cited origin and stress-tests the evidence base. It blends retraction-contamination tracing (live against Retraction Watch via CrossRef), citation-graph coherence, claim-to-citation alignment, and statistical forensics (Benford's law, p-curve, impossible-precision detection). Optional web-source attribution needs a BRAVE_API_KEY on the server.",
 };
 
 function GradeGauge({ score, size = 96 }) {
@@ -206,6 +208,100 @@ function StatisticsPanel({ data }) {
   );
 }
 
+/* Provenance Chain Verification panel — the flagship evidence-tracing check.
+   Note: for the first four layers a HIGHER sub-score is worse (contamination,
+   graph anomaly) while alignment and fingerprint use 100 = best. */
+function ProvenancePanel({ data }) {
+  if (!data) return <p className="text-sm text-slate-500">Provenance data is not available for this analysis.</p>;
+  const sub = (
+    { label, value, goodHigh, noteKey } = {}
+  ) => {
+    const v = typeof value === "number" ? value : 0;
+    const bad = goodHigh ? 100 - v : v;
+    const { text, cls, bar } = riskLabel(bad);
+    return (
+      <div className="card bg-slate-50 border-slate-200">
+        <p className="text-[11px] uppercase tracking-wide text-slate-500">{label}</p>
+        <p className="text-xl font-bold mt-1">{Math.round(v)}</p>
+        <div className="h-1.5 w-full bg-slate-200 rounded-full mt-1.5 overflow-hidden">
+          <div className={`h-full rounded-full ${bar}`} style={{ width: `${Math.min(100, Math.max(0, v))}%` }} />
+        </div>
+        <p className={`text-[11px] mt-1.5 ${cls}`}>{text}</p>
+        {noteKey && <p className="text-[10px] text-slate-400 mt-1">{noteKey}</p>}
+      </div>
+    );
+  };
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-slate-600">{data.summary}</p>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {sub({ label: "Retraction contamination", value: data.contamination_score, goodHigh: false })}
+        {sub({ label: "Citation-graph coherence", value: data.graph_anomaly_score, goodHigh: false })}
+        {sub({ label: "Claim–citation alignment", value: data.alignment_score, goodHigh: true })}
+        {sub({ label: "Statistical forensics", value: data.fingerprint_score, goodHigh: true })}
+      </div>
+      {(data.retracted_dois?.length || 0) > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-red-700 uppercase tracking-wide">⚠ Cited retracted research</p>
+          {data.retracted_dois.map((d, i) => (
+            <div key={i} className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs">
+              <p className="font-medium text-slate-900">{d.doi || "Unknown DOI"}</p>
+              {d.retraction_date && <p className="text-slate-600 mt-0.5">Retracted {d.retraction_date}</p>}
+              {d.notice_type && <p className="text-slate-500 mt-0.5">Notice: {d.notice_type}</p>}
+              {d.reason && <p className="text-red-700 mt-0.5">{d.reason}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+      {(data.alignment_verdicts?.length || 0) > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Claim-by-claim alignment</p>
+          {data.alignment_verdicts.map((v, i) => {
+            const isAligned = v.alignment === "aligned";
+            const isWeak = v.alignment === "weak";
+            return (
+              <div key={i} className={`p-3 rounded-lg border text-xs ${isAligned ? "bg-emerald-50 border-emerald-200" : isWeak ? "bg-amber-50 border-amber-200" : "bg-red-50 border-red-200"}`}>
+                <p className="font-medium text-slate-900 break-all">{v.doi || "Referenced claim"} <span className={`ml-2 font-semibold ${isAligned ? "text-emerald-700" : "text-amber-700"}`}>{isAligned ? "✓ Aligned" : isWeak ? "⚠ Weak" : "✗ Unsupported"}</span></p>
+                {v.reason && <p className="text-slate-600 mt-1">{v.reason}</p>}
+                {typeof v.overlap === "number" && <p className="text-slate-500 mt-1">Lexical overlap with cited abstract: {Math.round(v.overlap * 100)}%</p>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {data.web_summary && (
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Web source attribution {data.web_available ? "" : "(not configured)"}</p>
+          {data.web_available ? (
+            (data.web_matches?.length || 0) > 0 ? (
+              <div className="space-y-2">
+                {data.web_matches.map((m, i) => (
+                  <div key={i} className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs">
+                    <p className="font-semibold text-slate-900 truncate">
+                      {m.title ? <a href={m.url} target="_blank" rel="noopener noreferrer" className="underline">{m.title}</a> : m.url}
+                    </p>
+                    {m.snippet && <p className="text-slate-600 mt-1 line-clamp-2">{m.snippet}</p>}
+                    <div className="flex items-center gap-2 mt-1.5">
+                      <div className="h-1.5 flex-1 bg-slate-200 rounded-full overflow-hidden">
+                        <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${Math.min(100, Math.max(0, m.similarity || 0))}%` }} />
+                      </div>
+                      <span className="text-slate-500">{Math.round(m.similarity || 0)}%</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg p-3">✓ No matching sources found on the open web.</p>
+            )
+          ) : (
+            <p className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg p-3">{data.web_summary}</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function WritingPanel({ data }) {
   return (
     <div className="space-y-4">
@@ -296,6 +392,18 @@ function flatRecordToResult(record) {
       score: score(record.writing_quality_score),
       checks: [],
     },
+    provenance: {
+      score: score(record.provenance_score, 50),
+      summary: "Replay of a stored analysis — detailed provenance evidence is not kept after the original scan completes.",
+      fingerprint_score: score(record.methodology_fingerprint_score, 50),
+      alignment_score: score(record.claim_alignment_score, 50),
+      contamination_score: score(record.retraction_contamination_score, 0),
+      graph_anomaly_score: score(record.citation_graph_anomaly_score, 0),
+      web_available: false,
+      web_matches: [],
+      retracted_dois: [],
+      alignment_verdicts: [],
+    },
   };
 }
 
@@ -340,6 +448,7 @@ export default function App() {
       { key: "citation", score: result.citation?.validity_score ?? 0 },
       { key: "statistics", score: 100 - (result.statistics?.risk_score ?? 0), invert: true },
       { key: "writing", score: result.writing?.score ?? 0 },
+      { key: "provenance", score: result.provenance?.score ?? 0 },
     ];
   }, [result]);
 
@@ -450,13 +559,13 @@ export default function App() {
         {/* Hero */}
         <section className="text-center max-w-2xl mx-auto">
           <span className="inline-block text-xs font-semibold px-3 py-1 rounded-full bg-blue-100 text-blue-700 mb-4">
-            ✦ VeriPaper — the 5-in-1 integrity check
+            ✦ VeriPaper — the 6-in-1 integrity check
           </span>
           <h1 className="text-3xl sm:text-4xl font-black text-slate-900 tracking-tight">
             Is your research paper really <span className="text-blue-600">credible?</span>
           </h1>
           <p className="text-slate-600 mt-3">
-            One upload. Five checks: plagiarism, AI authorship, citation authenticity, statistical integrity, and academic writing standards — every result explained in plain language.
+            One upload. Six checks: plagiarism, AI authorship, citation authenticity, statistical integrity, academic writing standards, and provenance-chain verification — every result explained in plain language.
           </p>
         </section>
 
@@ -544,7 +653,7 @@ export default function App() {
                   <p className="text-xs text-slate-500 mt-1 max-w-xl">{MODULE_EXPLAIN[openModule]}</p>
                 </div>
                 <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
-                  {openModule === "statistics" ? "Integrity: " : openModule === "citation" || openModule === "writing" ? "Score: " : "Risk: "}
+                  {openModule === "statistics" ? "Integrity: " : openModule === "citation" || openModule === "writing" || openModule === "provenance" ? "Score: " : "Risk: "}
                   {Math.round(modules.find((m) => m.key === openModule).score)} / 100
                 </span>
               </div>
@@ -553,6 +662,7 @@ export default function App() {
               {openModule === "citation" && <CitationPanel data={result.citation} />}
               {openModule === "statistics" && <StatisticsPanel data={result.statistics} />}
               {openModule === "writing" && <WritingPanel data={result.writing} />}
+              {openModule === "provenance" && <ProvenancePanel data={result.provenance} />}
             </div>
             </ErrorBoundary>
 

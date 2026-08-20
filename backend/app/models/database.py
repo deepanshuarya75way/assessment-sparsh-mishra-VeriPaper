@@ -42,6 +42,15 @@ class AnalysisResult(Base):
     writing_checks = Column(JSON, nullable=True)
     sections = Column(JSON, nullable=True)
 
+    # Provenance Chain Verification (PCV) layers — nullable for back-compat
+    # with older records created before PCV shipped.
+    retraction_contamination_score = Column(Integer, nullable=True)
+    citation_graph_anomaly_score = Column(Integer, nullable=True)
+    claim_alignment_score = Column(Integer, nullable=True)
+    methodology_fingerprint_score = Column(Integer, nullable=True)
+    provenance_score = Column(Integer, nullable=True)
+    pcv_details = Column(JSON, nullable=True)
+
     # Report generation
     report_path = Column(String(255), nullable=True)
     report_generated = Column(Boolean, default=False)

@@ -62,9 +62,13 @@ def init_db():
         )
 
     engine = create_engine(db_url, **engine_kwargs)
-    
+
     # Create all tables
     Base.metadata.create_all(bind=engine)
+
+    # Zero-downtime migration: SQLite on the free tier cannot be wiped on
+    # redeploy, so new columns must be added incrementally with ALTER TABLE.
+    _apply_analysis_result_migrations(engine)
     
     # Verify connection
     try:
@@ -76,6 +80,36 @@ def init_db():
         raise
     
     return engine
+
+
+def _apply_analysis_result_migrations(engine) -> None:
+    """Incrementally add new AnalysisResult columns to existing SQLite tables.
+
+    SQLAlchemy's create_all never removes or adds columns to existing tables,
+    so each new DB field shipped in a release needs a matching entry here. The
+    guard queries the live schema so the migration is idempotent.
+    """
+    NEW_COLUMNS = [
+        ("retraction_contamination_score", "INTEGER"),
+        ("citation_graph_anomaly_score", "INTEGER"),
+        ("claim_alignment_score", "INTEGER"),
+        ("methodology_fingerprint_score", "INTEGER"),
+        ("provenance_score", "INTEGER"),
+        ("pcv_details", "JSON"),
+    ]
+    try:
+        from sqlalchemy import inspect
+        existing = {c["name"] for c in inspect(engine).get_columns("analysis_results")}
+        missing = [c for c in NEW_COLUMNS if c[0] not in existing]
+    except Exception:  # noqa: BLE001 — never block startup on introspection failure
+        missing = []
+    for name, dtype in missing:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE analysis_results ADD COLUMN {name} {dtype}"))
+            logger.info("Migrated analysis_results: added %s (%s)", name, dtype)
+        except Exception as exc:  # noqa: BLE001 — race between workers; skip on conflict
+            logger.warning("Migration of %s skipped: %s", name, exc)
 
 
 # Global engine instance (initialized once)

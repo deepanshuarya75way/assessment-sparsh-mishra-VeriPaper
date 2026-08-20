@@ -62,6 +62,28 @@ class SectionEvidence(BaseModel):
     word_count: int
 
 
+class ProvenanceModuleResult(BaseModel):
+    """Provenance Chain Verification (PCV) layer results."""
+    score: int = Field(..., ge=0, le=100)
+    summary: str
+    fingerprint_score: int = Field(..., ge=0, le=100)
+    fingerprint_summary: str
+    fingerprint_notes: Dict[str, str]  # benford / p_curve / precision / consistency
+    alignment_score: int = Field(..., ge=0, le=100)
+    alignment_summary: str
+    alignment_verdicts: List[Dict[str, object]]  # {doi, alignment, overlap, reason}
+    contamination_score: int = Field(..., ge=0, le=100)
+    contamination_summary: str
+    retracted_dois: List[Dict[str, object]]  # {doi, retraction_date, reason, notice_type}
+    graph_anomaly_score: int = Field(..., ge=0, le=100)
+    graph_anomaly_summary: str
+    graph_density: float = 0.0
+    isolated_references: int = 0
+    web_matches: List[Dict[str, object]] = []  # {url, title, snippet, matched_text, similarity}
+    web_summary: str = ""
+    web_available: bool = False
+
+
 class ScoreContributions(BaseModel):
     ai_detection: float
     plagiarism: float
@@ -90,6 +112,8 @@ class AnalysisResult(BaseModel):
     risk_triggers: List[str]
     action_items: List[str]
     flags: List[str]
+    # Provenance Chain Verification
+    provenance: Optional[ProvenanceModuleResult] = None
     # Evidence export
     report_path: str
     download_url: Optional[str] = None

@@ -171,3 +171,61 @@ def test_scoring_high_ai_yields_review_verdict():
                          risk_score=5, writing_score=80)
     cred = scoring.compute_credibility(*args)
     assert cred.verdict != "Credible", cred
+
+
+# ---------------- Provenance Chain Verification ----------------
+
+from app.services.pcv import (
+    detect_graph_anomalies,
+    fingerprint_methodology,
+    fuse_pcv_scores,
+)
+from app.services.web_attribution import attribute_web_sources
+
+
+def test_pcv_fingerprint_methodology_parses_pvalues():
+    text = (
+        "Group A performed significantly better than Group B (p = 0.031). "
+        "The second comparison yielded a p-value of 0.004, while the control "
+        "condition showed no meaningful difference (p = 0.42)."
+    )
+    fp = fingerprint_methodology(text)
+    assert fp is not None
+    assert fp.p_curve >= 40  # p = 0.031 and 0.004 are legitimate signals
+    assert fp.score is not None
+
+
+def test_pcv_benford_never_crashes():
+    # Artificial first-digit distribution that is maximally unnatural
+    nums = " ".join("123.45" for _ in range(40))
+    fp = fingerprint_methodology(f"Reported values: {nums}.")
+    assert fp is not None
+    assert 0 <= fp.score <= 100
+
+
+def test_pcv_graph_anomaly_few_citations_degrades_gracefully():
+    result = detect_graph_anomalies(["10.1234/a", "10.1234/b"])
+    assert result is not None
+    assert 0 <= result.score <= 100
+    assert result.summary
+
+
+def test_pcv_fusion_bounded_and_reasonable():
+    from app.services.pcv import ContaminationResult
+
+    contamination = ContaminationResult(score=0, summary="none retracted", retracted_dois=[])
+    graph = detect_graph_anomalies(["10.1234/a", "10.1234/b", "10.1234/c"])
+    alignment = {"alignment_score": 70, "verdicts": [], "summary": "aligned"}
+    fp = fingerprint_methodology(
+        "The experiment reported 120 samples with p = 0.02 and an effect size of 0.41."
+    )
+    fused = fuse_pcv_scores(85, contamination, graph, alignment, fp)
+    assert 0 <= fused <= 100
+
+
+def test_web_attribution_degrades_without_key(monkeypatch):
+    monkeypatch.setenv("BRAVE_API_KEY", "")
+    result = attribute_web_sources(["a sentence about machine learning evaluation"])
+    assert result.available is False
+    assert "not configured" in result.summary.lower()
+

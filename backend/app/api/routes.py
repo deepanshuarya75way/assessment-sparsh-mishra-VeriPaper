@@ -45,6 +45,9 @@ from ..services import (
     writing_quality,
 )
 from ..services.report import write_pdf_report
+from ..services import pcv as pcv_svc
+from ..services import web_attribution as web_svc
+from ..models.schemas import ProvenanceModuleResult
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +122,28 @@ async def analyze_paper(
             citation_result = citation_svc.analyze_citations(doc.full_text)
             statistics_result = statistics_svc.analyze_statistics(doc.full_text)
             writing_result = writing_quality.analyze_writing_quality(doc)
+
+            # --- Provenance Chain Verification (PCV) layers ---
+            citing_sentences = doc.citing_sentences
+            verified_dois = [v.doi for v in citation_result.verified if v.valid]
+            try:
+                contamination = pcv_svc.trace_retraction_contamination(verified_dois)
+                graph_anomaly = pcv_svc.detect_graph_anomalies(verified_dois)
+                alignment = pcv_svc.check_claim_alignment(citing_sentences, verified_dois)
+                fingerprint = pcv_svc.fingerprint_methodology(doc.full_text)
+                pcv_score = pcv_svc.fuse_pcv_scores(
+                    citation_result.validity_score, contamination, graph_anomaly, alignment, fingerprint
+                )
+                # Web attribution samples only the most similar corpus segments
+                # to stay inside the free web-search quota.
+                web_segments = [m.matched_text for m in plagiarism_result.matches[:5] if m.matched_text]
+                web_result = web_svc.attribute_web_sources(web_segments)
+            except Exception as exc:  # noqa: BLE001 — PCV never breaks the pipeline
+                logger.warning("PCV failed: %s", exc)
+                pcv_score = 50
+                contamination = graph_anomaly = fingerprint = None
+                alignment, web_result = {}, None
+
             breakdown = scoring.compute_credibility(
                 ai_result, plagiarism_result, citation_result, statistics_result, writing_result
             )
@@ -137,6 +162,11 @@ async def analyze_paper(
                 writing_quality_score=writing_result.score,
                 overall_research_credibility=breakdown.credibility_score,
                 verdict=breakdown.verdict,
+                retraction_contamination_score=contamination.score if contamination else None,
+                citation_graph_anomaly_score=graph_anomaly.score if graph_anomaly else None,
+                claim_alignment_score=alignment.get("alignment_score") if alignment else None,
+                methodology_fingerprint_score=fingerprint.score if fingerprint else None,
+                provenance_score=pcv_score,
                 plagiarism_matches=json.dumps(
                     [
                         {
@@ -187,6 +217,32 @@ async def analyze_paper(
                         }
                         for s in doc.sections
                     ]
+                ) or None,
+                pcv_details=json.dumps(
+                    {
+                        "retracted_dois": contamination.retracted_dois if contamination else [],
+                        "contamination_summary": contamination.summary if contamination else "",
+                        "graph_density": graph_anomaly.density if graph_anomaly else 0.0,
+                        "isolated_references": graph_anomaly.isolated_references if graph_anomaly else 0,
+                        "graph_summary": graph_anomaly.summary if graph_anomaly else "",
+                        "alignment_verdicts": alignment.get("verdicts", []) if alignment else [],
+                        "alignment_summary": alignment.get("summary", "") if alignment else "",
+                        "fingerprint_notes": {
+                            "benford": fingerprint.benford_note if fingerprint else "",
+                            "p_curve": fingerprint.p_curve_note if fingerprint else "",
+                            "precision": fingerprint.precision_note if fingerprint else "",
+                            "consistency": fingerprint.consistency_note if fingerprint else "",
+                        } if fingerprint else {},
+                        "web_matches": [
+                            {
+                                "url": w.url, "title": w.title, "snippet": w.snippet,
+                                "matched_text": w.matched_text, "similarity": w.similarity,
+                            }
+                            for w in (web_result.matches if web_result else [])
+                        ],
+                        "web_summary": web_result.summary if web_result else "",
+                        "web_available": web_result.available if web_result else False,
+                    }
                 ) or None,
             )
             db.add(record)
@@ -275,6 +331,7 @@ async def analyze_paper(
             risk_triggers=[],
             action_items=["Review the detailed evidence in the downloaded report."],
             flags=[],
+            provenance=_build_provenance(record),
             report_path=report_url,
             download_url=report_url,
         )
@@ -432,6 +489,26 @@ async def _process_analysis_task(task_id: str):
             citation_result = citation_svc.analyze_citations(doc.full_text)
             statistics_result = statistics_svc.analyze_statistics(doc.full_text)
             writing_result = writing_quality.analyze_writing_quality(doc)
+
+            # --- Provenance Chain Verification (PCV) layers ---
+            citing_sentences = doc.citing_sentences
+            verified_dois = [v.doi for v in citation_result.verified if v.valid]
+            try:
+                contamination = pcv_svc.trace_retraction_contamination(verified_dois)
+                graph_anomaly = pcv_svc.detect_graph_anomalies(verified_dois)
+                alignment = pcv_svc.check_claim_alignment(citing_sentences, verified_dois)
+                fingerprint = pcv_svc.fingerprint_methodology(doc.full_text)
+                pcv_score = pcv_svc.fuse_pcv_scores(
+                    citation_result.validity_score, contamination, graph_anomaly, alignment, fingerprint
+                )
+                web_segments = [m.matched_text for m in plagiarism_result.matches[:5] if m.matched_text]
+                web_result = web_svc.attribute_web_sources(web_segments)
+            except Exception as exc:  # noqa: BLE001 — PCV never breaks the pipeline
+                logger.warning("PCV failed: %s", exc)
+                pcv_score = 50
+                contamination = graph_anomaly = fingerprint = None
+                alignment, web_result = {}, None
+
             breakdown = scoring.compute_credibility(
                 ai_result, plagiarism_result, citation_result, statistics_result, writing_result
             )
@@ -451,6 +528,11 @@ async def _process_analysis_task(task_id: str):
                 record.writing_quality_score = writing_result.score
                 record.overall_research_credibility = breakdown.credibility_score
                 record.verdict = breakdown.verdict
+                record.retraction_contamination_score = contamination.score if contamination else None
+                record.citation_graph_anomaly_score = graph_anomaly.score if graph_anomaly else None
+                record.claim_alignment_score = alignment.get("alignment_score") if alignment else None
+                record.methodology_fingerprint_score = fingerprint.score if fingerprint else None
+                record.provenance_score = pcv_score
                 record.plagiarism_matches = json.dumps(
                     [
                         {
@@ -502,6 +584,32 @@ async def _process_analysis_task(task_id: str):
                         for s in doc.sections
                     ]
                 ) or None
+                record.pcv_details = json.dumps(
+                    {
+                        "retracted_dois": contamination.retracted_dois if contamination else [],
+                        "contamination_summary": contamination.summary if contamination else "",
+                        "graph_density": graph_anomaly.density if graph_anomaly else 0.0,
+                        "isolated_references": graph_anomaly.isolated_references if graph_anomaly else 0,
+                        "graph_summary": graph_anomaly.summary if graph_anomaly else "",
+                        "alignment_verdicts": alignment.get("verdicts", []) if alignment else [],
+                        "alignment_summary": alignment.get("summary", "") if alignment else "",
+                        "fingerprint_notes": {
+                            "benford": fingerprint.benford_note if fingerprint else "",
+                            "p_curve": fingerprint.p_curve_note if fingerprint else "",
+                            "precision": fingerprint.precision_note if fingerprint else "",
+                            "consistency": fingerprint.consistency_note if fingerprint else "",
+                        } if fingerprint else {},
+                        "web_matches": [
+                            {
+                                "url": w.url, "title": w.title, "snippet": w.snippet,
+                                "matched_text": w.matched_text, "similarity": w.similarity,
+                            }
+                            for w in (web_result.matches if web_result else [])
+                        ],
+                        "web_summary": web_result.summary if web_result else "",
+                        "web_available": web_result.available if web_result else False,
+                    }
+                ) or None
                 db.commit()
                 db.refresh(record)
 
@@ -523,6 +631,60 @@ async def _process_analysis_task(task_id: str):
         task["status"] = "error"
         task["error"] = str(exc)
         task["payload"] = None
+
+
+def _build_provenance(record) -> Optional[dict]:
+    """Build the ProvenanceModuleResult payload from a DB record (None for old records)."""
+    details = json.loads(record.pcv_details) if record.pcv_details else None
+    if details is None and record.provenance_score is None:
+        return None
+    details = details or {}
+    return {
+        "score": record.provenance_score if record.provenance_score is not None else 50,
+        "summary": _provenance_summary(details, record),
+        "fingerprint_score": record.methodology_fingerprint_score if record.methodology_fingerprint_score is not None else 50,
+        "fingerprint_summary": _fingerprint_summary(details),
+        "fingerprint_notes": details.get("fingerprint_notes", {}) or {},
+        "alignment_score": record.claim_alignment_score if record.claim_alignment_score is not None else 50,
+        "alignment_summary": details.get("alignment_summary", "Claim alignment was not computed."),
+        "alignment_verdicts": details.get("alignment_verdicts", []) or [],
+        "contamination_score": record.retraction_contamination_score if record.retraction_contamination_score is not None else 50,
+        "contamination_summary": details.get("contamination_summary", "Retraction tracing was not run."),
+        "retracted_dois": details.get("retracted_dois", []) or [],
+        "graph_anomaly_score": record.citation_graph_anomaly_score if record.citation_graph_anomaly_score is not None else 50,
+        "graph_anomaly_summary": details.get("graph_summary", "The reference graph was not analyzed."),
+        "graph_density": details.get("graph_density", 0.0) or 0.0,
+        "isolated_references": details.get("isolated_references", 0) or 0,
+        "web_matches": details.get("web_matches", []) or [],
+        "web_summary": details.get("web_summary", ""),
+        "web_available": details.get("web_available", False) is True,
+    }
+
+
+def _provenance_summary(details: dict, record) -> str:
+    retracted = (details.get("retracted_dois") or []) if isinstance(details, dict) else []
+    if retracted:
+        return (
+            f"{len(retracted)} cited reference(s) were later retracted; the "
+            f"supporting evidence should be re-checked."
+        )
+    if record.provenance_score is None:
+        return "Provenance verification was not available for this analysis."
+    if record.provenance_score >= 75:
+        return "Claims trace back to intact, interconnected scholarly sources and the statistical fingerprints look natural."
+    if record.provenance_score >= 50:
+        return "Some provenance signals are weak — check the alignment and fingerprint notes below."
+    return "Multiple provenance checks failed; the paper's supporting evidence needs careful review."
+
+
+def _fingerprint_summary(details: dict) -> str:
+    notes = details.get("fingerprint_notes", {}) or {} if isinstance(details, dict) else {}
+    flags = [k for k, v in notes.items() if v and "irregular" in v.lower()]
+    if flags:
+        return f"Statistical forensics flagged {', '.join(flags)}. Review the raw data."
+    if notes:
+        return "Statistical fingerprints look natural for experimental research."
+    return "Methodological fingerprinting was not computed."
 
 
 def _build_response(record, ai_detection, plagiarism_svc, json):
@@ -597,6 +759,7 @@ def _build_response(record, ai_detection, plagiarism_svc, json):
         "risk_triggers": [],
         "action_items": ["Review the detailed evidence in the downloaded report."],
         "flags": [],
+        "provenance": _build_provenance(record),
         "report_path": report_url,
         "download_url": report_url,
     }

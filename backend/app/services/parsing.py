@@ -46,6 +46,36 @@ class ParsedDocument:
     def section_texts(self) -> List[str]:
         return [s.text for s in self.sections if s.text.strip()]
 
+    @property
+    def citing_sentences(self) -> List[str]:
+        """Claim-bearing sentences suitable for provenance/alignment checks.
+
+        Pulls sentences from the body sections (abstract, introduction,
+        methods, results, discussion, conclusion) — where claims live —
+        skips the reference list, and caps the output at 40 sentences so
+        downstream CrossRef lookups stay inside polite-pool budgets.
+        """
+        body_labels = {"abstract", "introduction", "methods", "results", "discussion", "conclusion"}
+        body_text = " ".join(s.text for s in self.sections if s.label in body_labels)
+        if not body_text.strip():
+            body_text = self.full_text
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", body_text.replace("\n", " "))]
+        candidates = [s for s in sentences if 12 <= len(s.split()) <= 60]
+        # Prefer sentences that cite something or state a claim.
+        prioritized = [
+            s for s in candidates
+            if CITATION_STYLE_IEEE.search(s) or CITATION_STYLE_APA.search(s) or re.search(r"\b(10\.\d{4,9}/\S+)\b", s)
+        ]
+        prioritized = [s for s in prioritized if s not in {""}] if prioritized else []
+        pool = prioritized + [s for s in candidates if s not in prioritized]
+        seen, out = set(), []
+        for s in pool:
+            key = s.lower()[:80]
+            if key not in seen:
+                seen.add(key)
+                out.append(s)
+        return out[:40]
+
 
 # --- Section heading patterns ------------------------------------------------
 SECTION_LABELS = [
