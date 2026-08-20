@@ -82,6 +82,7 @@ class ProvenanceModuleResult(BaseModel):
     web_matches: List[Dict[str, object]] = []  # {url, title, snippet, matched_text, similarity}
     web_summary: str = ""
     web_available: bool = False
+    web_provider: str = ""
 
 
 class ScoreContributions(BaseModel):

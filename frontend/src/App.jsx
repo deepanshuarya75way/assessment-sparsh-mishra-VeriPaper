@@ -55,7 +55,7 @@ const MODULE_EXPLAIN = {
   citation: "Every DOI is checked live against the CrossRef registry. Missing or invalid DOIs reduce the score, because fabricated references are a common integrity red flag.",
   statistics: "Looks for unrealistic numeric patterns — suspiciously clean p-values, round percentages, and implausible results — that often appear in manipulated reporting.",
   writing: "Checks the paper against academic conventions: required sections, formal tone, consistent citation style, citation-text linkage, figure/table references, and heading hierarchy.",
-  provenance: "VeriPaper's flagship check: traces every claim to its cited origin and stress-tests the evidence base. It blends retraction-contamination tracing (live against Retraction Watch via CrossRef), citation-graph coherence, claim-to-citation alignment, and statistical forensics (Benford's law, p-curve, impossible-precision detection). Optional web-source attribution needs a BRAVE_API_KEY on the server.",
+  provenance: "VeriPaper's flagship check: traces every claim to its cited origin and stress-tests the evidence base. It blends retraction-contamination tracing (live against Retraction Watch via CrossRef), citation-graph coherence, claim-to-citation alignment, and statistical forensics (Benford's law, p-curve, impossible-precision detection). Web-source attribution runs against live web search at zero cost (no API key required).",
 };
 
 function GradeGauge({ score, size = 96 }) {
@@ -271,7 +271,7 @@ function ProvenancePanel({ data }) {
       )}
       {data.web_summary && (
         <div className="space-y-2">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Web source attribution {data.web_available ? "" : "(not configured)"}</p>
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Web source attribution · {data.web_provider ? data.web_provider.charAt(0).toUpperCase() + data.web_provider.slice(1) : "unavailable"}</p>
           {data.web_available ? (
             (data.web_matches?.length || 0) > 0 ? (
               <div className="space-y-2">
@@ -291,7 +291,7 @@ function ProvenancePanel({ data }) {
                 ))}
               </div>
             ) : (
-              <p className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg p-3">✓ No matching sources found on the open web.</p>
+              <p className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg p-3">✓ Checked the live web ({data.web_provider || "search"}) — no close matches for the flagged text.</p>
             )
           ) : (
             <p className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg p-3">{data.web_summary}</p>
@@ -418,6 +418,7 @@ function buildReplayProvenance(record) {
     web_matches: details.web_matches || [],
     web_summary: details.web_summary || "",
     web_available: details.web_available === true,
+    web_provider: details.web_provider || "",
   };
 }
 

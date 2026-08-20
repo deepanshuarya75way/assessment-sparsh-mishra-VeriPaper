@@ -242,6 +242,7 @@ async def analyze_paper(
                         ],
                         "web_summary": web_result.summary if web_result else "",
                         "web_available": web_result.available if web_result else False,
+                        "web_provider": web_result.provider if web_result else "",
                     }
                 ) or None,
             )
@@ -608,6 +609,7 @@ async def _process_analysis_task(task_id: str):
                         ],
                         "web_summary": web_result.summary if web_result else "",
                         "web_available": web_result.available if web_result else False,
+                        "web_provider": web_result.provider if web_result else "",
                     }
                 ) or None
                 db.commit()
@@ -658,6 +660,7 @@ def _build_provenance(record) -> Optional[dict]:
         "web_matches": details.get("web_matches", []) or [],
         "web_summary": details.get("web_summary", ""),
         "web_available": details.get("web_available", False) is True,
+        "web_provider": details.get("web_provider", ""),
     }
 
 

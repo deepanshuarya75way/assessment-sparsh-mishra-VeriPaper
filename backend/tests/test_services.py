@@ -180,6 +180,8 @@ from app.services.pcv import (
     fingerprint_methodology,
     fuse_pcv_scores,
 )
+import types
+from app.services import web_attribution
 from app.services.web_attribution import attribute_web_sources
 
 
@@ -223,9 +225,35 @@ def test_pcv_fusion_bounded_and_reasonable():
     assert 0 <= fused <= 100
 
 
-def test_web_attribution_degrades_without_key(monkeypatch):
+def test_web_attribution_works_without_any_key(monkeypatch):
+    """Web attribution stays available with zero API keys via the DuckDuckGo fallback."""
     monkeypatch.setenv("BRAVE_API_KEY", "")
+    monkeypatch.setenv("GOOGLE_CSE_API_KEY", "")
+    monkeypatch.delenv("GOOGLE_CSE_ID", raising=False)
+
+    class _FakeResp:
+        status_code = 200
+        text = (
+            "<a rel=\"nofollow\" href=\"https://example.com/paper\" class='result-link'>"
+            "Example machine learning evaluation paper</a>"
+        )
+
+    def _fake_post(url, **kwargs):
+        return _FakeResp()
+
+    monkeypatch.setattr(web_attribution, "requests", types.SimpleNamespace(post=_fake_post, get=lambda *a, **k: _FakeResp()))
     result = attribute_web_sources(["a sentence about machine learning evaluation"])
-    assert result.available is False
-    assert "not configured" in result.summary.lower()
+    assert result.available is True
+    assert result.provider == "duckduckgo"
+    assert result.segments_checked == 1
+    assert len(result.matches) == 1
+    assert result.matches[0].url == "https://example.com/paper"
+
+
+def test_web_attribution_empty_segments_needs_no_provider(monkeypatch):
+    monkeypatch.setenv("BRAVE_API_KEY", "")
+    monkeypatch.setenv("GOOGLE_CSE_API_KEY", "")
+    result = attribute_web_sources([])
+    assert result.available is True
+    assert result.matches == []
 
