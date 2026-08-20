@@ -77,5 +77,9 @@ class AnalysisResult(Base):
             "report_path": self.report_path,
             "analyzed_at": self.analyzed_at.isoformat() if self.analyzed_at else None,
             "provenance_score": self.provenance_score,
+            "retraction_contamination_score": self.retraction_contamination_score,
+            "citation_graph_anomaly_score": self.citation_graph_anomaly_score,
+            "claim_alignment_score": self.claim_alignment_score,
+            "methodology_fingerprint_score": self.methodology_fingerprint_score,
             "provenance_details": json.loads(self.pcv_details) if self.pcv_details else None,
         }

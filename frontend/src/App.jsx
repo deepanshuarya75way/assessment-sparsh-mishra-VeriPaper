@@ -405,10 +405,10 @@ function buildReplayProvenance(record) {
     summary:
       details.summary ||
       "Replay of a stored analysis — detailed provenance evidence is not kept after the original scan completes.",
-    contamination_score: details.contamination_score ?? 50,
-    graph_anomaly_score: details.graph_anomaly_score ?? 50,
-    alignment_score: details.alignment_score ?? 50,
-    fingerprint_score: details.fingerprint_score ?? 50,
+    contamination_score: details.contamination_score ?? score(record.retraction_contamination_score, 50),
+    graph_anomaly_score: details.graph_anomaly_score ?? score(record.citation_graph_anomaly_score, 50),
+    alignment_score: details.alignment_score ?? score(record.claim_alignment_score, 50),
+    fingerprint_score: details.fingerprint_score ?? score(record.methodology_fingerprint_score, 50),
     contamination_summary: details.contamination_summary || "",
     retracted_dois: details.retracted_dois || [],
     alignment_verdicts: details.alignment_verdicts || [],
