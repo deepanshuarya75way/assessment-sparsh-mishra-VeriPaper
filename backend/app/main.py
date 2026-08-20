@@ -62,14 +62,16 @@ async def lifespan(_: FastAPI):
         logger.error(f"⚠️ Error closing database: {e}")
 
 
+# Model weights are hosted on the public SparshM8/veripaper-assets CDN repo.
+# Public release download URLs on the VeriPaper repo returned 404 for every
+# asset (even on public release pages), so weights were moved to a dedicated
+# public repository whose public download URLs work anonymously.
 _TRANSFORMER_RELEASE_URL = (
-    "https://github.com/SparshM8/VeriPaper/releases/download"
+    "https://github.com/SparshM8/veripaper-assets/releases/download"
     "/models-onnx-v2/ai_detector_transformer_onnx.tar.gz"
 )
-# Authenticated API fallback for the same asset. Public release download URLs
-# have been observed to return 404 after assets are re-issued on this repo,
-# while the API endpoint with a fine-grained token stays reliable.
-# RENDER_GITHUB_TOKEN (or GITHUB_TOKEN) is set in the Render dashboard.
+# Authenticated API fallback for the legacy asset on this repo, kept in case
+# the CDN download fails (token set in the Render dashboard as GH_TOKEN).
 _TRANSFORMER_RELEASE_API_URL = (
     "https://api.github.com/repos/SparshM8/VeriPaper/releases/assets/522326158"
 )

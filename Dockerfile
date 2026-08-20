@@ -49,11 +49,9 @@ COPY backend/models/ai_detector_winner.json backend/models/
 ARG GH_TOKEN=
 RUN mkdir -p backend/models/ai_detector_transformer \
  && (curl -fsSL -o /tmp/ai_detector_transformer_onnx.tar.gz \
-      https://github.com/SparshM8/VeriPaper/releases/download/models-onnx-v2/ai_detector_transformer_onnx.tar.gz \
+      https://github.com/SparshM8/veripaper-assets/releases/download/models-onnx-v2/ai_detector_transformer_onnx.tar.gz \
  || curl -fsSL -o /tmp/ai_detector_transformer_onnx.tar.gz \
-      -H "Authorization: Bearer ${GH_TOKEN}" \
-      -H "Accept: application/octet-stream" \
-      https://api.github.com/repos/SparshM8/VeriPaper/releases/assets/522326158) \
+      https://github.com/SparshM8/veripaper-assets/releases/download/models-onnx-v2/ai_detector_transformer_onnx.tar.gz) \
  && tar xzf /tmp/ai_detector_transformer_onnx.tar.gz -C backend/models/ai_detector_transformer/ \
  && rm -f /tmp/ai_detector_transformer_onnx.tar.gz \
  && ls -la backend/models/ai_detector_transformer/model_quantized.onnx
