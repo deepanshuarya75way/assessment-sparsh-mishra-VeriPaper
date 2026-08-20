@@ -171,3 +171,8 @@ Contributions are welcome. Please read [DEVELOPMENT.md](DEVELOPMENT.md) for arch
 ---
 
 **Version** 1.0.0 · **Status**: Production — live at [veripaper.onrender.com](https://veripaper.onrender.com)
+> **Deployment note (June 2026):** the quantized model weights are delivered at
+> build time from the public `SparshM8/veripaper-assets` CDN repository
+> (release `models-onnx-v2`), because asset download URLs on this repository
+> intermittently return 404. A runtime restore path in `backend/app/main.py`
+> fetches the same archive on demand if the image copy is missing.
