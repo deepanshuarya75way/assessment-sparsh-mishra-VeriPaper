@@ -43,9 +43,17 @@ RUN echo "DEP_BUILD_MARKER=$PY_DEP_BUILD_MARKER" && \
 COPY backend/models/ai_detector.joblib backend/models/
 COPY backend/models/ai_detector_metrics.json backend/models/
 COPY backend/models/ai_detector_winner.json backend/models/
+# Public release download URLs on this repo have been observed to return 404
+# after assets are re-issued. Try the v2 public URL first, then fall back to
+# the authenticated GitHub API asset endpoint when GH_TOKEN is provided.
+ARG GH_TOKEN=
 RUN mkdir -p backend/models/ai_detector_transformer \
- && curl -fsSL -o /tmp/ai_detector_transformer_onnx.tar.gz \
-      https://github.com/SparshM8/VeriPaper/releases/download/models-onnx-v1/ai_detector_transformer_onnx.tar.gz \
+ && (curl -fsSL -o /tmp/ai_detector_transformer_onnx.tar.gz \
+      https://github.com/SparshM8/VeriPaper/releases/download/models-onnx-v2/ai_detector_transformer_onnx.tar.gz \
+ || curl -fsSL -o /tmp/ai_detector_transformer_onnx.tar.gz \
+      -H "Authorization: Bearer ${GH_TOKEN}" \
+      -H "Accept: application/octet-stream" \
+      https://api.github.com/repos/SparshM8/VeriPaper/releases/assets/522326158) \
  && tar xzf /tmp/ai_detector_transformer_onnx.tar.gz -C backend/models/ai_detector_transformer/ \
  && rm -f /tmp/ai_detector_transformer_onnx.tar.gz \
  && ls -la backend/models/ai_detector_transformer/model_quantized.onnx

@@ -64,8 +64,26 @@ async def lifespan(_: FastAPI):
 
 _TRANSFORMER_RELEASE_URL = (
     "https://github.com/SparshM8/VeriPaper/releases/download"
-    "/models-onnx-v1/ai_detector_transformer_onnx.tar.gz"
+    "/models-onnx-v2/ai_detector_transformer_onnx.tar.gz"
 )
+# Authenticated API fallback for the same asset. Public release download URLs
+# have been observed to return 404 after assets are re-issued on this repo,
+# while the API endpoint with a fine-grained token stays reliable.
+# RENDER_GITHUB_TOKEN (or GITHUB_TOKEN) is set in the Render dashboard.
+_TRANSFORMER_RELEASE_API_URL = (
+    "https://api.github.com/repos/SparshM8/VeriPaper/releases/assets/522326158"
+)
+
+
+def _get_download_headers() -> list:
+    """Headers that maximise the chance of a successful asset download."""
+    import os
+
+    token = os.getenv("RENDER_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
+    headers = [("User-Agent", "VeriPaper/1.0")]
+    if token:
+        headers.append(("Authorization", f"Bearer {token}"))
+    return headers
 
 
 def _memory_free_bytes() -> int:
@@ -88,18 +106,36 @@ def _has_memory_headroom(needed_mb: float = 350.0) -> bool:
 
 def _restore_transformer_weights_from_release() -> None:
     """Stream the weights tarball to disk and extract it with minimal memory."""
+    import os
     import tarfile
 
     import requests
 
     model_dir = settings.TRANSFORMER_MODEL_DIR
     tmp_path = str(model_dir / "._weights_tmp.tar.gz")
+    # Try the public URL first; if it fails (e.g. 404 after a re-issue), fall
+    # back to the authenticated API asset endpoint when a token is available.
+    attempts = [("public", _TRANSFORMER_RELEASE_URL)]
+    if os.getenv("RENDER_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN"):
+        attempts.append(("api", _TRANSFORMER_RELEASE_API_URL))
     try:
-        with open(tmp_path, "wb") as tmp:
-            with requests.get(_TRANSFORMER_RELEASE_URL, timeout=600, stream=True) as resp:
-                resp.raise_for_status()
-                for chunk in resp.iter_content(chunk_size=1024 * 1024):
-                    tmp.write(chunk)
+        last_err = None
+        for label, url in attempts:
+            try:
+                with open(tmp_path, "wb") as tmp:
+                    with requests.get(
+                        url, timeout=600, stream=True, headers=dict(_get_download_headers())
+                    ) as resp:
+                        resp.raise_for_status()
+                        for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                            tmp.write(chunk)
+                logger.info("Transformer weights downloaded (%s source: %s)", label, url)
+                break
+            except requests.RequestException as exc:
+                last_err = exc
+                logger.warning("Weights download failed via %s: %s", label, exc)
+        else:
+            raise last_err or RuntimeError("All download sources failed")
         with tarfile.open(tmp_path, mode="r|gz") as tar:
             for member in tar:
                 name = member.name.split("/", 1)[-1] if "/" in member.name else member.name

@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ["main", "master"]
+    branches: ["main", "master", "feature/**"]
   pull_request:
 
 jobs:
@@ -89,15 +89,30 @@ jobs:
 
       - name: Transformer engine status (production)
         run: |
-          body=$(curl -sf --max-time 60 "${{ env.PRODUCTION_URL }}/api/detector/status")
-          echo "$body"
-          echo "$body" | python3 -c "
+          # Render free tier sleeps the service; a fresh boot may defer the
+          # transformer weights restore to the first request. Probe a few
+          # times with gaps so a cold-start race does not fail the check.
+          ATTEMPTS=5
+          INTERVAL=30
+          for i in $(seq 1 $ATTEMPTS); do
+            body=$(curl -sf --max-time 120 "${{ env.PRODUCTION_URL }}/api/detector/status" || true)
+            echo "$body"
+            if [ -n "$body" ] && echo "$body" | python3 -c "
           import json,sys
           d=json.load(sys.stdin)
           assert d.get('load_ok') is True, 'transformer not loaded'
           assert d.get('transformer_load_error') is None, d.get('transformer_load_error')
           print('transformer engine OK, test score =', d.get('test_inference_score'))
-          "
+          "; then
+              echo "Transformer engine healthy on attempt $i/$ATTEMPTS"
+              exit 0
+            fi
+            echo "Attempt $i/$ATTEMPTS: transformer not ready yet; warming up the service..."
+            curl -s --max-time 120 -o /dev/null "${{ env.PRODUCTION_URL }}/api/detector/config"
+            sleep $INTERVAL
+          done
+          echo "Transformer engine did not become healthy after $ATTEMPTS attempts"
+          exit 1
 
       - name: Frontend serves the dashboard
         run: |
