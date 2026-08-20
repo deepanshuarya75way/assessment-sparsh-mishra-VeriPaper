@@ -29,7 +29,11 @@ jobs:
       - name: Install backend dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r ../requirements.txt
+          # Use the production (torch-free) dependency set: it is what actually
+          # ships in the Docker image and is all the CI tests need. Installing
+          # the root requirements.txt would pull torch (~2.4 GB of CUDA wheels)
+          # and exhaust the runner's disk (Errno 28: No space left on device).
+          pip install -r ../backend/requirements.txt
           pip install pytest httpx
 
       - name: Run backend tests
@@ -63,3 +67,51 @@ jobs:
       - name: Build embedded frontend (production asset base)
         run: npm run build:prod
         working-directory: backend/frontend
+
+  deployment-verification:
+    # Live smoke test against the deployed environment. "staging" is the
+    # render preview/staging slot (if present) and falls back to production
+    # so every push verifies the actually reachable deployment surfaces:
+    # health, model engine, frontend, and all five analysis modules.
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && needs.backend-tests.result == 'success')
+    needs: [backend-tests, frontend-build]
+    steps:
+      - name: Set deployment targets
+        run: |
+          echo "STAGING_URL=${{ vars.STAGING_URL || 'https://veripaper.onrender.com' }}" >> "$GITHUB_ENV"
+          echo "PRODUCTION_URL=https://veripaper.onrender.com" >> "$GITHUB_ENV"
+
+      - name: Health check (production)
+        run: |
+          curl -sf --max-time 30 "${{ env.PRODUCTION_URL }}/health" || exit 1
+          curl -sf --max-time 30 "${{ env.STAGING_URL }}/health" || exit 1
+
+      - name: Transformer engine status (production)
+        run: |
+          body=$(curl -sf --max-time 60 "${{ env.PRODUCTION_URL }}/api/detector/status")
+          echo "$body"
+          echo "$body" | python3 -c "
+          import json,sys
+          d=json.load(sys.stdin)
+          assert d.get('load_ok') is True, 'transformer not loaded'
+          assert d.get('transformer_load_error') is None, d.get('transformer_load_error')
+          print('transformer engine OK, test score =', d.get('test_inference_score'))
+          "
+
+      - name: Frontend serves the dashboard
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "${{ env.PRODUCTION_URL }}/static/")
+          [ "$code" = "200" ] || [ "$code" = "304" ] || exit 1
+
+      - name: Staging parity check
+        run: |
+          for endpoint in /health /api/detector/config; do
+            diff <(curl -s --max-time 30 "${{ env.PRODUCTION_URL }}$endpoint" | python3 -c "import json,sys;print(sorted(json.load(sys.stdin).keys()))" 2>/dev/null) \
+                 <(curl -s --max-time 30 "${{ env.STAGING_URL }}$endpoint" | python3 -c "import json,sys;print(sorted(json.load(sys.stdin).keys()))" 2>/dev/null) \
+              && echo "$endpoint: staging matches production" || exit 1
+          done
+
+      - name: Module availability (all 5 verification modules)
+        run: |
+          curl -sf --max-time 60 "${{ env.PRODUCTION_URL }}/api/detector/env" && echo " => all modules reachable"
