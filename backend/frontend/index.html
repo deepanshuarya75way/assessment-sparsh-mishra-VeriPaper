@@ -5,9 +5,49 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>VeriPaper — Research Paper Verification Suite</title>
     <meta name="description" content="VeriPaper checks research papers in seconds: plagiarism, AI authorship, citation authenticity, statistical integrity, and academic writing standards. Upload PDF, DOCX, or TXT and get a credibility score with plain-language explanations." />
+    
+    <!-- Preload critical fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
+    
+    <style>
+      /* Minimal CSS for the static shell to prevent FOUC and improve LCP */
+      body { margin: 0; font-family: 'Inter', -apple-system, sans-serif; background-color: #f8fafc; color: #0f172a; }
+      .shell-header { height: 64px; border-bottom: 1px solid #e2e8f0; background-color: rgba(255,255,255,0.9); display: flex; align-items: center; padding: 0 24px; }
+      .shell-hero { max-width: 42rem; margin: 4rem auto 2rem; text-align: center; padding: 0 24px; }
+      .shell-badge { display: inline-block; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 9999px; background-color: #dbeafe; color: #1d4ed8; margin-bottom: 16px; }
+      .shell-title { font-size: 36px; font-weight: 900; color: #0f172a; margin: 0; letter-spacing: -0.025em; }
+      .shell-title span { color: #2563eb; }
+      .shell-desc { color: #475569; margin-top: 12px; line-height: 1.625; font-size: 16px; }
+      .shell-loading { max-width: 6xl; margin: 2rem auto; padding: 2rem; border: 1px solid #e2e8f0; border-radius: 12px; background: white; text-align: center; color: #64748b; font-size: 14px; }
+    </style>
   </head>
-  <body class="bg-slate-950 text-slate-100">
-    <div id="root"></div>
+  <body>
+    <div id="root">
+      <!-- Static Shell: This renders instantly, satisfying LCP before JS loads -->
+      <header class="shell-header">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <div style="width: 36px; height: 36px; border-radius: 8px; background: linear-gradient(to bottom right, #2563eb, #4338ca); color: white; font-weight: bold; display: flex; align-items: center; justify-content: center;">V</div>
+          <div>
+            <div style="font-weight: bold; color: #0f172a; line-height: 1;">VeriPaper</div>
+            <div style="font-size: 11px; color: #64748b; line-height: 1; margin-top: 2px;">Research Verification Suite</div>
+          </div>
+        </div>
+      </header>
+      
+      <main>
+        <section class="shell-hero">
+          <span class="shell-badge">✦ VeriPaper — the 6-in-1 integrity check</span>
+          <h1 class="shell-title">Is your research paper really <span>credible?</span></h1>
+          <p class="shell-desc">One upload. Six checks: plagiarism, AI authorship, citation authenticity, statistical integrity, academic writing standards, and provenance-chain verification — every result explained in plain language.</p>
+        </section>
+        
+        <div class="shell-loading">
+          Loading forensic verification engine...
+        </div>
+      </main>
+    </div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
