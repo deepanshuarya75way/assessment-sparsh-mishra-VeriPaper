@@ -237,6 +237,7 @@ async def analyze_paper(
                             {
                                 "url": w.url, "title": w.title, "snippet": w.snippet,
                                 "matched_text": w.matched_text, "similarity": w.similarity,
+                                "match_type": "uncited",
                             }
                             for w in (web_result.matches if web_result else [])
                         ],
@@ -277,6 +278,9 @@ async def analyze_paper(
 
         result = AnalysisResult(
             filename=record.filename,
+            author_name=record.author_name,
+            institution=record.institution,
+            full_text=record.full_text,
             analyzed_at=(record.analyzed_at or datetime.now(timezone.utc)).isoformat(),
             word_count=record.word_count,
             section_count=len(sections_payload),
@@ -604,6 +608,7 @@ async def _process_analysis_task(task_id: str):
                             {
                                 "url": w.url, "title": w.title, "snippet": w.snippet,
                                 "matched_text": w.matched_text, "similarity": w.similarity,
+                                "match_type": "uncited",
                             }
                             for w in (web_result.matches if web_result else [])
                         ],

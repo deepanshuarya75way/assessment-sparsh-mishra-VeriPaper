@@ -96,6 +96,9 @@ def _apply_analysis_result_migrations(engine) -> None:
         ("methodology_fingerprint_score", "INTEGER"),
         ("provenance_score", "INTEGER"),
         ("pcv_details", "JSON"),
+        ("author_name", "TEXT"),
+        ("institution", "TEXT"),
+        ("full_text", "TEXT"),
     ]
     try:
         from sqlalchemy import inspect

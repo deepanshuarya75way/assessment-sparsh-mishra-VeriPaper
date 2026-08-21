@@ -18,6 +18,9 @@ class AnalysisResult(Base):
 
     # File metadata
     filename = Column(String(255), nullable=False, index=True)
+    author_name = Column(String(255), nullable=True)
+    institution = Column(String(255), nullable=True)
+    full_text = Column(JSON, nullable=True)
     file_size = Column(Integer, nullable=False)  # bytes
     file_hash = Column(String(64), unique=True, index=True)  # SHA256
     word_count = Column(Integer, nullable=False, default=0)
@@ -63,6 +66,9 @@ class AnalysisResult(Base):
         return {
             "id": self.id,
             "filename": self.filename,
+            "author_name": self.author_name,
+            "institution": self.institution,
+            "full_text": self.full_text,
             "file_size": self.file_size,
             "word_count": self.word_count,
             "plagiarism_score": self.plagiarism_score,

@@ -7,6 +7,8 @@ class PlagiarismMatchSchema(BaseModel):
     similarity: float = Field(..., ge=0, le=100)
     source: str
     matched_text: str
+    match_type: str = "uncited"  # 'cited', 'uncited', or 'internal'
+
 
 
 class PlagiarismModuleResult(BaseModel):
@@ -95,6 +97,9 @@ class ScoreContributions(BaseModel):
 
 class AnalysisResult(BaseModel):
     filename: str
+    author_name: Optional[str] = None
+    institution: Optional[str] = None
+    full_text: Optional[str] = None
     analyzed_at: str
     word_count: int
     section_count: int

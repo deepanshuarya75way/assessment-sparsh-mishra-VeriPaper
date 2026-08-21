@@ -33,6 +33,8 @@ class SimilarityMatch:
     source_corpus: str
     similarity: float
     matched_text: str
+    match_type: str = "uncited"  # 'cited', 'uncited', or 'internal'
+
 
 
 @dataclass
@@ -278,6 +280,7 @@ def _detect_internal_duplication(sections: List["Section"]) -> List[SimilarityMa
                         source_corpus="self",
                         similarity=round(jacc * 100, 1),
                         matched_text=text_i[:180],
+                        match_type="internal",
                     )
                 )
     return matches
