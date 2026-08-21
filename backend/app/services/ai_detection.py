@@ -210,6 +210,9 @@ def trained_ai_score(text: str) -> Optional[float]:
     except Exception as exc:  # pragma: no cover
         logger.error("Trained model inference failed: %s", exc)
         return None
+    finally:
+        import gc
+        gc.collect()
 
 
 # --- Transformer tier (Hugging Face) ------------------------------------------
@@ -383,6 +386,9 @@ def transformer_ai_score(text: str) -> Optional[float]:
     except Exception as exc:  # pragma: no cover
         logger.error("Transformer inference failed: %s", exc)
         return None
+    finally:
+        import gc
+        gc.collect()
 
 
 # --- Public API ---------------------------------------------------------------

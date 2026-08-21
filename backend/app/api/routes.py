@@ -353,6 +353,8 @@ async def analyze_paper(
 # --- Asynchronous analysis queue (BackgroundTasks) ---
 # Shared in-memory task store: task_id -> {"status": "queued"|"processing"|"done"|"error", "result": ...}
 _task_store: dict = {}
+_task_expiry: dict = {}
+MAX_TASK_AGE_SEC = 600  # Evict tasks after 10 minutes to save RAM
 
 
 @router.post("/analyze/async")
@@ -438,11 +440,20 @@ async def analyze_paper_async(
 @router.get("/analyze/{task_id}/status")
 def get_analysis_status(task_id: str, db: Session = Depends(get_db)):
     """Poll the status of an async analysis. Returns status and full result when done."""
+    # Periodic cleanup of old tasks to free memory
+    now = time.time()
+    expired = [tid for tid, ts in _task_expiry.items() if now > ts]
+    for tid in expired:
+        _task_store.pop(tid, None)
+        _task_expiry.pop(tid, None)
+
     task = _task_store.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found or expired")
 
     if task["status"] == "done" and task["result"]:
+        # Mark for eviction soon after it's been read
+        _task_expiry[task_id] = now + 60 
         return {
             "status": "done",
             "record_id": task["record_id"],
@@ -633,11 +644,17 @@ async def _process_analysis_task(task_id: str):
 
         # Clean up payload from memory
         task["payload"] = None
+        _task_expiry[task_id] = time.time() + MAX_TASK_AGE_SEC
+        import gc
+        gc.collect()
     except Exception as exc:
         logger.exception("Async analysis task failed for %s", task_id)
         task["status"] = "error"
         task["error"] = str(exc)
         task["payload"] = None
+        _task_expiry[task_id] = time.time() + MAX_TASK_AGE_SEC
+        import gc
+        gc.collect()
 
 
 def _build_provenance(record) -> Optional[dict]:
