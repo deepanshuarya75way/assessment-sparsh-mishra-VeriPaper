@@ -1,6 +1,0 @@
-{
-  "engine": "distilbert_finetuned",
-  "eval_f1": 0.7974,
-  "label_1": "AI variant (controlled rewriting of real arXiv abstracts)",
-  "subset": 1800
-}
