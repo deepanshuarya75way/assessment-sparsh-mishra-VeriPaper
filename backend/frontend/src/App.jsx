@@ -431,7 +431,7 @@ export default function App() {
   const [openModule, setOpenModule] = useState("ai_detection");
   const [config, setConfig] = useState(null);
   const [serverHistory, setServerHistory] = useState([]);
-  const [localHistory] = useState(getHistory());
+  const [localHistory, setLocalHistory] = useState(getHistory());
   const [showOnboard, setShowOnboard] = useState(false);
   const [replayError, setReplayError] = useState("");
   const [replayLoading, setReplayLoading] = useState(false);
@@ -499,6 +499,7 @@ export default function App() {
       setProgress(100);
       setResult(data);
       saveToHistory(data);
+      setLocalHistory(getHistory());
       setServerHistory((prev) => [
         { id: `analysis_${Date.now()}`, filename: data.filename, analyzed_at: new Date().toISOString(), overall_research_credibility: data.overall_research_credibility, verdict: data.verdict },
         ...prev,
@@ -531,20 +532,29 @@ export default function App() {
   const openOld = async (entry) => {
     setError("");
     setReplayError("");
-    // Only server-side rows have numeric ids; local/browser copies and the
-    // ephemeral preview rows use string ids that the API cannot resolve.
-    const recordId = Number(entry.id);
-    if (!Number.isFinite(recordId)) {
-      setReplayError("This entry was saved in your browser only — re-upload the paper for a fresh verification.");
+    
+    // 1. Try to find the full result in local history first (zero-cost persistence)
+    const localMatch = localHistory.find(h => h.id === entry.id || h.filename === entry.filename && h.timestamp === entry.analyzed_at);
+    if (localMatch && localMatch.ai_detection) {
+      setResult(localMatch);
+      setOpenModule("ai_detection");
       return;
     }
+
+    // 2. Fall back to server if it's a numeric record ID
+    const recordId = Number(entry.id);
+    if (!Number.isFinite(recordId)) {
+      setReplayError("This record is no longer on the server. Please re-upload for a fresh verification.");
+      return;
+    }
+
     setReplayLoading(true);
     try {
       const record = await fetchHistoryItem(recordId);
       setResult(flatRecordToResult(record));
       setOpenModule("ai_detection");
     } catch (err) {
-      setReplayError(friendlyError(err, "Could not open this analysis. Re-upload the paper for a fresh verification."));
+      setReplayError(friendlyError(err, "Could not open this analysis. The server record might have been cleared."));
     } finally {
       setReplayLoading(false);
     }

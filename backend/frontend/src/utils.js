@@ -87,7 +87,7 @@ export function saveToHistory(result) {
       timestamp: new Date().toISOString(),
       id: `analysis_${Date.now()}`
     };
-    const updated = [entry, ...history].slice(0, 10); // history guaranteed an array by getHistory()
+    const updated = [entry, ...history].slice(0, 20); // history guaranteed an array by getHistory()
     localStorage.setItem("veripaper_history", JSON.stringify(updated));
   } catch (e) {
     console.error("Failed to save history:", e);
