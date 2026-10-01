@@ -1,7 +1,7 @@
 import { Component, useEffect, useMemo, useState } from "react";
 import { analyzePaper, analyzePaperAsync, pollUntilDone, fetchHistory, fetchHistoryItem, fetchConfig } from "./api";
 import { downloadPDF, downloadCSV, downloadJSON, saveToHistory, getHistory, clearHistory } from "./utils";
-
+import { askReportQuestion } from "./api";
 /* ------------------------------------------------------------------ */
 /* Error boundary — a panel crash shows a friendly message, never a   */
 /* blank screen.                                                       */
@@ -435,6 +435,10 @@ export default function App() {
   const [showOnboard, setShowOnboard] = useState(false);
   const [replayError, setReplayError] = useState("");
   const [replayLoading, setReplayLoading] = useState(false);
+  const [chatMessages, setChatMessages] = useState([]);
+const [chatQuestion, setChatQuestion] = useState("");
+const [chatLoading, setChatLoading] = useState(false);
+const [chatError, setChatError] = useState("");
 
   const modulePanelFallback = () => (
     <div className="p-6 text-center">
@@ -549,6 +553,40 @@ export default function App() {
       setReplayLoading(false);
     }
   };
+  const askAboutReport = async () => {
+  const question = chatQuestion.trim();
+
+  if (!question || !result?.id) return;
+
+  setChatLoading(true);
+  setChatError("");
+
+  try {
+    const response = await askReportQuestion(result.id, question);
+
+    setChatMessages((messages) => [
+      ...messages,
+      {
+        role: "user",
+        content: question,
+      },
+      {
+        role: "assistant",
+        content: response.answer,
+        evidence: response.evidence || [],
+      },
+    ]);
+
+    setChatQuestion("");
+  } catch (err) {
+    setChatError(
+      err?.response?.data?.detail ||
+      "Could not get an answer. Please try again."
+    );
+  } finally {
+    setChatLoading(false);
+  }
+};
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -701,6 +739,9 @@ export default function App() {
                 <button onClick={() => downloadJSON(result)} className="btn-secondary w-full text-sm">JSON Export</button>
               </div>
             </div>
+            <section className= "report-chat">
+               ...
+            </section>
           </section>
         )}
 
