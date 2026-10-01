@@ -80,15 +80,15 @@ async def chat_about_report(
             detail="Report not found",
         )
 
-    result = answer_report_question(
+    result= answer_report_question(
         record=record,
-        question=question,
+        questions=question,
     )
 
     return {
         "report_id": record.id,
-        "answer": result["answer"],
-        "evidence": result["evidence"],
+        "answer": result.get("answer") or result.get("response") or result.get("message") or "I could not find that information in this report.",
+        "evidence": result.get("evidence",[]),
     }
 
 MAX_UPLOAD_BYTES = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024

@@ -1,0 +1,21 @@
+For a Linux Bash terminal, use these exact commands:
+
+1. Check report history
+
+curl http://127.0.0.1:8000/api/history
+
+2. Test chatbot
+
+If the report ID is 1:
+
+curl -X POST http://127.0.0.1:8000/api/reports/1/chat -H "Content-Type: application/json" -d '{"question":"What is the AI-written content score?"}'
+
+3. Test overall credibility
+
+curl -X POST http://127.0.0.1:8000/api/reports/1/chat -H "Content-Type: application/json" -d '{"question":"What is the overall credibility score?"}'
+
+4. Test hallucination protection
+
+curl -X POST http://127.0.0.1:8000/api/reports/1/chat -H "Content-Type: application/json" -d '{"question":"Who is the author of this paper?"}'
+
+If your history shows a different ID, replace 1 with that ID.

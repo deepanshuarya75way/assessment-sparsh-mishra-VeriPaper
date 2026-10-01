@@ -1,7 +1,7 @@
 import { Component, useEffect, useMemo, useState } from "react";
-import { analyzePaper, analyzePaperAsync, pollUntilDone, fetchHistory, fetchHistoryItem, fetchConfig } from "./api";
+import { analyzePaper, analyzePaperAsync, pollUntilDone, fetchHistory, fetchHistoryItem, fetchConfig, askReportQuestion} from "./api";
 import { downloadPDF, downloadCSV, downloadJSON, saveToHistory, getHistory, clearHistory } from "./utils";
-import { askReportQuestion } from "./api";
+
 /* ------------------------------------------------------------------ */
 /* Error boundary — a panel crash shows a friendly message, never a   */
 /* blank screen.                                                       */
@@ -436,9 +436,9 @@ export default function App() {
   const [replayError, setReplayError] = useState("");
   const [replayLoading, setReplayLoading] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
-const [chatQuestion, setChatQuestion] = useState("");
-const [chatLoading, setChatLoading] = useState(false);
-const [chatError, setChatError] = useState("");
+  const [chatQuestion, setChatQuestion] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatError, setChatError] = useState("");
 
   const modulePanelFallback = () => (
     <div className="p-6 text-center">
