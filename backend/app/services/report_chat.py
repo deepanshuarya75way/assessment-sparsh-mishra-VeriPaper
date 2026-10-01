@@ -1,76 +1,5 @@
-# import json
-# from typing import Any
-
-# def _safe_json(value: Any, default: Any):
-#   if not value:
-#     return default
-#   if isinstance(value,(dict,list)):
-#     return value
-#   try:
-#     return json.loads(value)
-#   except(TypeError, ValueError, json.JSONDecodeError):
-#     return default
-
-# def _score(value; Any):
-#   try:
-#     if value is None:
-#       return None
-#     return float(value)
-#   except (TpyeError, ValueError):
-#     return None
-
-# def _format_score(value:Any)->str:
-#   score = _score(value)
-#   if score is None:
-#     return "not avaliable"
-#   if score.is_integer():
-#     return str(int(score))
-#   return f"{score:,1f}"
-
-# def _contains_any(text: str, keywords:tuple[str, ...])->bool:
-#   return any(keyword in text for ketword in keywords)
-
-# def answer_report_question(record, question:str)->dict:
-#   q= question.strip().lower()
-#   filename = getattr(record, "filename", None)
-#   word_count = getattr(record, "word_count", None)
-#   verdict = getattr(record, "verdict", None)
-#   overall_score= getattr(record, "overall_research_credibility", None)
-#   evidence = []
-
-#   if _contains_any(q,(
-#     "overall score",
-#     "overall credibility",
-#     "credibility score",
-#     "overall result",
-#     "research credability",
-#     "final score",
-#   ),
-#   ):
-#     answer = (f"The overall research credibility score for this report is" f"{_format_score(overall_score)}/100.")
-#     if verdict:
-#       answer+=f"The Report verdict is `{verdict}`."
-#     evidence.append(
-#       {
-#         "label": "Overall research credibility",
-#         "value": f"{_format_score(overall_score)}/100",
-#       }
-#     )
-#     if verdict:
-#       evidence.append(
-#         {
-#           "label":"verdict",
-#           "value": str(verdict),
-#         }
-#       )
-#     return {
-#       "answer": answer,
-#       "evidence": evidence,
-#     }
-
-#   if 
-      
 import json
+
 def _get_json(value, default=None):
   if not value:
     return default if default is not None else{}
@@ -81,7 +10,7 @@ def _get_json(value, default=None):
   except(TypeError, ValueError):
     return default if default is not None else {}
 
-def answer_report_questions(record,questions):
+def answer_report_question(record,questions):
   q=questions.strip().lower()
   if "overall" in q or "credibility" in q:
     return {
