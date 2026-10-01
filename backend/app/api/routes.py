@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from services.report_chat import answer_report_question
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi import Request
 from fastapi import BackgroundTasks
@@ -52,6 +53,43 @@ from ..models.schemas import ProvenanceModuleResult
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["analysis"])
+@router.post("/reports/{record_id}/chat")
+async def chat_about_report(
+    record_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    body = await request.json()
+    question = str(body.get("question", "")).strip()
+
+    if not question:
+        raise HTTPException(
+            status_code=422,
+            detail="Question cannot be empty",
+        )
+
+    record = (
+        db.query(AnalysisRecord)
+        .filter(AnalysisRecord.id == record_id)
+        .first()
+    )
+
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Report not found",
+        )
+
+    result = answer_report_question(
+        record=record,
+        question=question,
+    )
+
+    return {
+        "report_id": record.id,
+        "answer": result["answer"],
+        "evidence": result["evidence"],
+    }
 
 MAX_UPLOAD_BYTES = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
 

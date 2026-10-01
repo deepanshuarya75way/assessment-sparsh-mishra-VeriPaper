@@ -122,4 +122,13 @@ class AnalysisResult(BaseModel):
     provenance: Optional[ProvenanceModuleResult] = None
     # Evidence export
     report_path: str
-    download_url: Optional[str] = None
+    download_url: Optional[str] = 
+    
+class ReportChatRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=1000)
+
+class ReportChatResponse(BaseModel):
+    report_id: int
+    answer: str
+    evidence: list[dict]
+

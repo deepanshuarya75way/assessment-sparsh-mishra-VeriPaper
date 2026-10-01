@@ -56,3 +56,9 @@ export async function fetchConfig() {
   const response = await api.get("/detector/config");
   return response.data;
 }
+
+export async function askReportQuestion(recordId, question){
+  const response = await api.post(`/reports/${recordId}/chat`,{question});
+  return response.data;
+}
+
