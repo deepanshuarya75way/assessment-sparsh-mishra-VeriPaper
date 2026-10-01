@@ -547,6 +547,9 @@ export default function App() {
       const record = await fetchHistoryItem(recordId);
       setResult(flatRecordToResult(record));
       setOpenModule("ai_detection");
+      setChatMessages([]);
+      setChatQuestion("");
+      setChatError("");
     } catch (err) {
       setReplayError(friendlyError(err, "Could not open this analysis. Re-upload the paper for a fresh verification."));
     } finally {
@@ -740,13 +743,13 @@ export default function App() {
               </div>
             </div>
             {/* Report Analysis Chatbot */}
-<section className="report-chat">
-  <div className="report-chat-header">
-    <h2>Ask about this report</h2>
-    <p>
-      Ask questions about the analysis results of this paper.
-    </p>
-  </div>
+            <section className="report-chat">
+              <div className="report-chat-header">
+                <h2>Ask about this report</h2>
+              <p>
+                  Ask questions about the analysis results of this paper.
+              </p>
+            </div>
 
   <div className="report-chat-messages">
     {chatMessages.length === 0 && (
