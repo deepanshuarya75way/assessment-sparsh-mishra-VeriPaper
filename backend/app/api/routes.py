@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from services.report_chat import answer_report_question
+from ..services.report_chat import answer_report_question
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi import Request
 from fastapi import BackgroundTasks

@@ -96,15 +96,15 @@ def answer_report_questions(record,questions):
       ],
     }
   if "plagiarism" in q or "similarity" in q:
+    score = _format_score(record.plagiarism_socre)
     return {
       "answer":(
-        f"Similarity & Plagiarism score is "
-        f"{record.plagiarism_score}/100".
+        f"Similarity & Plagiarism score is{score}/100."
       ),
       "evidence": [
         {
           "label": "Plagiarsim score",
-          "value": f"{record.plagiarsim_score}/100",
+          "value": f"{score}/100",
         }
       ],
     }
