@@ -480,6 +480,9 @@ export default function App() {
     setError("");
     setLoading(true);
     setResult(null);
+    setChatMessages([]);
+    setChatQuestion("");
+    setChatError("");
     setProgress(8);
 
     const timers = [];
@@ -499,12 +502,13 @@ export default function App() {
         120000
       );
 
-      const data = resultData.result;
+      const data = {
+        ... resultData.result, id: resultData.record_id,};
       setProgress(100);
       setResult(data);
       saveToHistory(data);
       setServerHistory((prev) => [
-        { id: `analysis_${Date.now()}`, filename: data.filename, analyzed_at: new Date().toISOString(), overall_research_credibility: data.overall_research_credibility, verdict: data.verdict },
+        { id: resultData.record_id, filename: data.filename, analyzed_at: new Date().toISOString(), overall_research_credibility: data.overall_research_credibility, verdict: data.verdict },
         ...prev,
       ].slice(0, 15));
       setOpenModule("ai_detection");
