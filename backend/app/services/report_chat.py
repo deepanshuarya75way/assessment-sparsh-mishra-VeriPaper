@@ -113,7 +113,7 @@ def answer_report_questions(record,questions):
     return {
       "answer":(
         f"AI written Content score is "
-        f"{record.ai_probability}/100".
+        f"{record.ai_probability}/100"
       ),
       "evidence": [
         {
@@ -127,7 +127,7 @@ def answer_report_questions(record,questions):
     return {
       "answer":(
         f"Citation Authenticity score is " 
-        f"{record.citation_validity_score}/100".
+        f"{record.citation_validity_score}/100"
       ),
       "evidence": [
         {
@@ -154,7 +154,7 @@ def answer_report_questions(record,questions):
     return {
       "answer":(
         f"writing & Standards score is "
-        f"{record.writing_quality_score}/100".
+        f"{record.writing_quality_score}/100"
       ),
       "evidence": [
         {
