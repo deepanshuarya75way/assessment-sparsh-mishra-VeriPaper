@@ -739,9 +739,79 @@ const [chatError, setChatError] = useState("");
                 <button onClick={() => downloadJSON(result)} className="btn-secondary w-full text-sm">JSON Export</button>
               </div>
             </div>
-            <section className= "report-chat">
-               ...
-            </section>
+            {/* Report Analysis Chatbot */}
+<section className="report-chat">
+  <div className="report-chat-header">
+    <h2>Ask about this report</h2>
+    <p>
+      Ask questions about the analysis results of this paper.
+    </p>
+  </div>
+
+  <div className="report-chat-messages">
+    {chatMessages.length === 0 && (
+      <div className="chat-empty">
+        Try asking:
+        <div>“What is the overall credibility score?”</div>
+        <div>“What is the AI-written content score?”</div>
+        <div>“What is the plagiarism score?”</div>
+      </div>
+    )}
+
+    {chatMessages.map((message, index) => (
+      <div
+        key={index}
+        className={`chat-message ${message.role}`}
+      >
+        <strong>
+          {message.role === "user" ? "You" : "VeriPaper"}
+        </strong>
+
+        <p>{message.content}</p>
+
+        {message.evidence?.length > 0 && (
+          <div className="chat-evidence">
+            {message.evidence.map((item, evidenceIndex) => (
+              <div key={evidenceIndex}>
+                <strong>{item.label}:</strong>{" "}
+                {item.value}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    ))}
+  </div>
+
+  {chatError && (
+    <div className="chat-error">
+      {chatError}
+    </div>
+  )}
+
+  <div className="chat-input-row">
+    <input
+      type="text"
+      value={chatQuestion}
+      onChange={(e) => setChatQuestion(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" && !chatLoading) {
+          askAboutReport();
+        }
+      }}
+      placeholder="Ask about this report..."
+      disabled={chatLoading}
+    />
+
+    <button
+      type="button"
+      onClick={askAboutReport}
+      disabled={chatLoading || !chatQuestion.trim()}
+    >
+      {chatLoading ? "Thinking..." : "Ask"}
+    </button>
+  </div>
+</section>
           </section>
         )}
 
