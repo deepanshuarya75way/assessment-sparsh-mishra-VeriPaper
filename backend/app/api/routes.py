@@ -771,6 +771,7 @@ def _build_response(record, ai_detection, plagiarism_svc, json):
     report_url = task_report_url = f"/files/{Path(record.report_path).name}" if record.report_path else None
 
     return {
+        "id": record.id,
         "filename": record.filename,
         "analyzed_at": (record.analyzed_at or datetime.now(timezone.utc)).isoformat(),
         "word_count": record.word_count,

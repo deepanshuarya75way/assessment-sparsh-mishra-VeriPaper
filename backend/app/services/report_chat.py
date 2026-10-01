@@ -25,7 +25,7 @@ def answer_report_question(record,questions):
       ],
     }
   if "plagiarism" in q or "similarity" in q:
-    score = _format_score(record.plagiarism_socre)
+    score = record.plagiarism_score
     return {
       "answer":(
         f"Similarity & Plagiarism score is{score}/100."
@@ -52,7 +52,7 @@ def answer_report_question(record,questions):
       ],
     }
 
-  if "citation" in q or "refernce" in q:
+  if "citation" in q or "refernce" in q or "doi" in q:
     return {
       "answer":(
         f"Citation Authenticity score is " 
@@ -93,7 +93,7 @@ def answer_report_question(record,questions):
       ],
     }
   return{
-    "answe": (
+    "answer": (
       "I only answer questions using information"
       "available in this report's analysis."
     ),
